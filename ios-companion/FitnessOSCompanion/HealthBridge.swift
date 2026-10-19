@@ -130,7 +130,7 @@ struct HealthPayload: Codable {
             deletedHeartRateIds
         ).sorted().joined(separator: "|")
         let digest = SHA256.hash(data: Data(ids.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        return digest.map { String(format: "%02x", Int($0)) }.joined()
     }
 }
 
