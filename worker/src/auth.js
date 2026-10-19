@@ -1,6 +1,7 @@
 import { HttpError, constantTimeEqual, randomToken, sha256Hex, toBase64, fromBase64, nowIso, uuid } from './util.js';
 
-const ITERATIONS = 210_000;
+// Cloudflare Workers WebCrypto rejects PBKDF2 iteration counts above 100,000.
+const ITERATIONS = 100_000;
 
 async function derive(passphrase, saltB64, iterations = ITERATIONS) {
   const keyMaterial = await crypto.subtle.importKey(

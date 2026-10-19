@@ -1,6 +1,7 @@
 const API_KEY = 'fos.apiUrl';
 const TOKEN_KEY = 'fos.sessionToken';
 const DEVICE_KEY = 'fos.deviceId';
+const PHOTO_MODE_KEY = 'fos.photoStorage';
 
 export function getApiBase() {
   const stored = localStorage.getItem(API_KEY);
@@ -22,6 +23,14 @@ export function getSessionToken() {
 export function setSessionToken(token) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
+}
+
+export function getPhotoStorageMode() {
+  return localStorage.getItem(PHOTO_MODE_KEY) || 'local-only';
+}
+
+export function setPhotoStorageMode(mode) {
+  if (mode) localStorage.setItem(PHOTO_MODE_KEY, mode);
 }
 
 export function getDeviceId() {

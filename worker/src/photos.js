@@ -86,3 +86,45 @@ export async function exportPhoto(env, userId, id) {
 export function newPhotoId() {
   return uuid();
 }
+
+
+/**
+ * Photo storage adapter.
+ *
+ * local-only (default): photos never leave the browser. Only metadata records
+ * are synced, and the Worker refuses photo byte uploads. This is the free,
+ * no-R2 mode.
+ *
+ * r2: private Cloudflare R2 objects, proxied only through authenticated
+ * requests. Enable by adding the binding and setting PHOTO_STORAGE="r2".
+ */
+export function createPhotoStorage(env) {
+  const mode = (env.PHOTO_STORAGE || 'local-only').toLowerCase();
+  if (mode === 'r2') {
+    if (!env.PHOTOS) {
+      throw new HttpError(503, 'PHOTO_STORAGE is r2 but the PHOTOS binding is missing');
+    }
+    return {
+      mode: 'r2',
+      upload: (userId, request, id) => uploadPhoto(env, userId, request, id),
+      get: (userId, id) => getPhoto(env, userId, id),
+      delete: (userId, id) => deletePhoto(env, userId, id),
+      export: (userId, id) => exportPhoto(env, userId, id),
+    };
+  }
+  return {
+    mode: 'local-only',
+    async upload() {
+      throw new HttpError(409, 'Cloud photo storage is disabled. Photos stay in this browser; only metadata syncs.');
+    },
+    async get() {
+      throw new HttpError(404, 'Photo bytes are stored on the originating device (cloud photo storage disabled)');
+    },
+    async delete() {
+      return { ok: true, localOnly: true };
+    },
+    async export() {
+      return null;
+    },
+  };
+}

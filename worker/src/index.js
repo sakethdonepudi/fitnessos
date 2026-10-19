@@ -35,7 +35,7 @@ import {
   listRecords,
   rowToRecord,
 } from './db.js';
-import { uploadPhoto, getPhoto, deletePhoto, exportPhoto } from './photos.js';
+import { createPhotoStorage } from './photos.js';
 import { runCloseout, listCronRuns } from './cron.js';
 
 const API_VERSION = '1';
@@ -53,11 +53,13 @@ async function route(request, env) {
 
   if (path === '/api/config' && method === 'GET') {
     const status = await firstRunStatus(env);
+    const storage = createPhotoStorage(env);
     return json({
       ...status,
       version: API_VERSION,
       timezone: 'Asia/Kolkata',
-      features: { sync: true, photos: true, cron: true, healthSync: true },
+      photoStorage: storage.mode,
+      features: { sync: true, photos: storage.mode === 'r2', photoMetadata: true, cron: true, healthSync: true },
       serverTime: nowIso(),
     });
   }
@@ -290,16 +292,23 @@ async function route(request, env) {
   const photoMatch = path.match(/^\/api\/photos\/([^/]+)$/);
   if (photoMatch) {
     const { userId } = await requireSession(env, request);
+    const storage = createPhotoStorage(env);
     if (method === 'POST') {
+      if (storage.mode !== 'r2') {
+        return json(
+          { error: 'Cloud photo storage is disabled. Photos remain in this browser; only metadata syncs.', mode: storage.mode },
+          409
+        );
+      }
       await rateLimit(env, `photo:${userId}`, 300, 3600);
-      const result = await uploadPhoto(env, userId, request, photoMatch[1]);
+      const result = await storage.upload(userId, request, photoMatch[1]);
       return json(result, 201);
     }
     if (method === 'GET') {
-      return getPhoto(env, userId, photoMatch[1]);
+      return storage.get(userId, photoMatch[1]);
     }
     if (method === 'DELETE') {
-      return json(await deletePhoto(env, userId, photoMatch[1]));
+      return json(await storage.delete(userId, photoMatch[1]));
     }
   }
 
@@ -343,14 +352,15 @@ async function route(request, env) {
     const rows = await env.DB.prepare(
       `SELECT * FROM sync_records WHERE user_id = ? AND deleted = 0 ORDER BY collection, updated_at`
     ).bind(userId).all();
-    const includePhotos = url.searchParams.get('photos') === '1';
+    const storage = createPhotoStorage(env);
+    const includePhotos = url.searchParams.get('photos') === '1' && storage.mode === 'r2';
     let photos = [];
     if (includePhotos) {
       const photoRows = await env.DB.prepare(
         `SELECT id FROM photos WHERE user_id = ? AND deleted = 0 ORDER BY created_at`
       ).bind(userId).all();
       for (const p of photoRows.results || []) {
-        const exported = await exportPhoto(env, userId, p.id);
+        const exported = await storage.export(userId, p.id);
         if (exported) photos.push(exported);
       }
     }
@@ -362,6 +372,8 @@ async function route(request, env) {
       timezone: 'Asia/Kolkata',
       records: (rows.results || []).map(rowToRecord),
       photos,
+      photoStorage: storage.mode,
+      photosNote: storage.mode === 'local-only' ? 'Photo bytes stay on the originating device. Only metadata is stored in D1.' : null,
     });
   }
 

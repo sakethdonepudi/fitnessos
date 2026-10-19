@@ -547,6 +547,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="settings-kv" style={{ marginTop: 14 }}><span>API URL</span><b className="truncate">{localStorage.getItem('fos.apiUrl') || 'Not set'}</b></div>
+            <div className="settings-kv"><span>Photo storage</span><b>{sync?.photoStorage === 'r2' ? 'Private R2' : 'This browser only (local-only)'}</b></div>
             <div className="settings-kv"><span>Last sync</span><b>{sync?.lastSync ? fmtDateTime(sync.lastSync) : 'Never'}</b></div>
             <div className="settings-kv"><span>Device ID</span><b className="mono tiny">{localStorage.getItem('fos.deviceId')?.slice(0, 18)}…</b></div>
 
@@ -568,6 +569,13 @@ export default function SettingsPage() {
               Conflict resolution is per field, not blind last-write-wins. A stale offline edit cannot overwrite a newer
               field. Deletions are kept as tombstones.
             </Note>
+            {sync?.photoStorage !== 'r2' && (
+              <Note tone="warn" icon={<IconInfo size={14} />}>
+                Cloud photo storage is off. Photo metadata syncs, but image files stay in this browser. Viewing a photo
+                on a second device will show “Photo file is on another device” until R2 is enabled. Use
+                Settings → Data & Backup to move photos with a backup file.
+              </Note>
+            )}
           </Panel>
 
           <div className="stack">
@@ -653,6 +661,10 @@ export default function SettingsPage() {
               Backups include records, checkpoints, verification metadata and encrypted photo blobs. Encrypted backups
               use PBKDF2-SHA-256 and AES-GCM. The passphrase is never uploaded.
             </p>
+            <Note tone="info" icon={<IconInfo size={14} />}>
+              Photo files are stored in this browser only. A backup is the way to move them to another device while
+              cloud photo storage is disabled. Metadata still syncs through D1.
+            </Note>
             <div className="settings-subhead">CSV exports</div>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
               {[

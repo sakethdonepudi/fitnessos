@@ -33,6 +33,7 @@ import { addDaysKey, eachDate, todayKey, weekStartKey, isStale, localDateKey, tz
 import { buildSnapshot, diffSnapshots } from '../../shared/checkpoint.js';
 import { computeDailySteps } from '../../shared/health.js';
 import { requestSync } from './sync.js';
+import { getPhotoStorageMode } from './remote.js';
 
 const TZ = 'Asia/Kolkata';
 
@@ -646,6 +647,7 @@ async function savePhoto(file, kind, extra = {}) {
             Model: metadata.Model || null,
           }
         : null,
+      storage: getPhotoStorageMode(),
       ...extra,
     },
     { id }

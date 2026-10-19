@@ -10,10 +10,17 @@ database_name = "fitnessos"
 database_id = "6eae433d-624a-45c4-af76-f46039ada26a"
 migrations_dir = "migrations"
 
-# Create with `wrangler r2 bucket create fitnessos-photos`.
-[[r2_buckets]]
-binding = "PHOTOS"
-bucket_name = "fitnessos-photos"
+# R2 is intentionally disabled for the free/local-only deployment.
+# Photo bytes stay in the browser's IndexedDB; only metadata syncs to D1.
+# To enable cloud photo storage later:
+#   1. enable R2 in Cloudflare
+#   2. npx wrangler r2 bucket create fitnessos-photos --storage-class Standard
+#   3. restore the [[r2_buckets]] binding below
+#   4. set PHOTO_STORAGE = "r2"
+#
+# [[r2_buckets]]
+# binding = "PHOTOS"
+# bucket_name = "fitnessos-photos"
 
 [triggers]
 crons = ["25 18 * * *"]
@@ -21,6 +28,7 @@ crons = ["25 18 * * *"]
 [vars]
 ALLOWED_ORIGINS = "https://sakethdonepudi.github.io,http://localhost:5173,http://localhost:4173"
 ENVIRONMENT = "production"
+PHOTO_STORAGE = "local-only"
 
 # Secrets (set with `wrangler secret put ...`):
 #   SESSION_SECRET   - random 32+ byte secret used for token hashing pepper

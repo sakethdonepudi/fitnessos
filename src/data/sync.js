@@ -8,7 +8,7 @@ import {
   nowIso,
   importRecord,
 } from './db.js';
-import { remote, getSessionToken } from './remote.js';
+import { remote, getSessionToken, getPhotoStorageMode, setPhotoStorageMode } from './remote.js';
 
 const listeners = new Set();
 let running = false;
@@ -26,6 +26,7 @@ export const syncState = {
   error: null,
   conflicts: 0,
   cursor: 0,
+  photoStorage: typeof localStorage === 'undefined' ? 'local-only' : getPhotoStorageMode(),
 };
 
 function emit() {
@@ -43,9 +44,25 @@ function setState(partial) {
   emit();
 }
 
+async function refreshRemoteConfig() {
+  if (!remote.configured()) {
+    setState({ configured: false, photoStorage: 'local-only' });
+    return;
+  }
+  try {
+    const config = await remote.config();
+    const mode = config.photoStorage || 'local-only';
+    setPhotoStorageMode(mode);
+    setState({ configured: true, photoStorage: mode });
+  } catch {
+    setState({ photoStorage: getPhotoStorageMode() });
+  }
+}
+
 export async function initSync() {
   if (started) {
     setState({ authenticated: !!getSessionToken(), configured: remote.configured() });
+    await refreshRemoteConfig();
     requestSync(0);
     return;
   }
@@ -71,6 +88,7 @@ export async function initSync() {
   });
   if (timer) clearInterval(timer);
   timer = setInterval(() => requestSync(0), 45_000);
+  await refreshRemoteConfig();
   requestSync(0);
 }
 
@@ -167,6 +185,11 @@ async function applyRemote(remoteRecord) {
 }
 
 async function preparePhotoUploads(records) {
+  // local-only: photo bytes never leave this browser. Metadata is still pushed
+  // so other devices know a photo exists, without inventing a remote URL.
+  if (syncState.photoStorage !== 'r2') {
+    return records;
+  }
   const uploadable = [];
   for (const record of records) {
     if (record.collection !== 'photos') {
