@@ -1,6 +1,6 @@
 # Deployment status
 
-Last verified: 2026-10-19 23:15 UTC (2026-10-20 04:45 IST)
+Last verified: 2026-10-19 23:20 UTC (2026-10-20 04:50 IST)
 
 ## Live services
 
@@ -17,8 +17,8 @@ Last verified: 2026-10-19 23:15 UTC (2026-10-20 04:45 IST)
 
 - Repository: https://github.com/sakethdonepudi/fitnessos (public, code only)
 - Worker deployment version: `9110fb1e-3126-48b7-8f56-97028474da48`
-- Deployed source commit: `ea56868`
-- Pages workflow: https://github.com/sakethdonepudi/fitnessos/actions/runs/39322084211
+- Deployed source commit: `76d585c`
+- Pages workflow: https://github.com/sakethdonepudi/fitnessos/actions/runs/39340639260
 
 ## Production account
 
@@ -26,9 +26,12 @@ Last verified: 2026-10-19 23:15 UTC (2026-10-20 04:45 IST)
 - Cloud sync passphrase is stored locally at `~/.fitnessos/cloud-passphrase` (0600).
 - Worker URL is stored at `~/.fitnessos/cloud-url`.
 - The one-time `SETUP_TOKEN` was deleted from this Mac after registration.
-- D1 contains only the production profile/defaults: profile, goal, 8 foods,
-  3 recipes and the treadmill preset. No demo progress, test meals, test
-  water, test photos or test checkpoints remain.
+- D1 contains the production profile/defaults (goal, 8 foods, 3 recipes,
+  treadmill preset), **249 real Apple Health step samples** (iPhone + Apple
+  Watch, Oct 13–17), 10 daily step summaries and 10 checkpoints. No demo
+  records, test meals, test water, test photos or diagnostic imports remain.
+- The existing iPhone companion device token is active (not revoked) and has
+  successfully authenticated health writes.
 - To connect a new browser: open the live app → **Connect account** → enter the
   passphrase from the file above. The Worker URL is prefilled by the Pages build.
 
