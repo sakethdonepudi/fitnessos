@@ -26,7 +26,7 @@ import { fmtNum, fmtKg, fmtPct, fmtDate, fmtDateLong, fmtTime, fmtMinutes, relat
 const SLOT_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack', meal: 'Meal' };
 
 export default function TodayPage() {
-  const { bootstrap, refresh, user, toast } = useApp();
+  const { bootstrap, refresh, user, toast, dataVersion } = useApp();
   const [stepHistory, setStepHistory] = useState([]);
   const [schedule, setSchedule] = useState(null);
   const [modal, setModal] = useState(null);
@@ -44,7 +44,7 @@ export default function TodayPage() {
 
   useEffect(() => {
     loadExtras();
-  }, []);
+  }, [dataVersion]);
 
   const reload = async () => {
     await refresh();

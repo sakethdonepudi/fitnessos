@@ -1,14 +1,20 @@
 import SwiftUI
 import HealthKit
-import Foundation
+import UIKit
+import Security
 
 /*
- Fitness OS — minimal iPhone companion.
+ Fitness OS — iPhone HealthKit companion (automatic sync).
 
- Create a new iOS App (SwiftUI, iOS 17+) in Xcode, replace ContentView.swift
- with this file, add HealthKit capability, and paste the Info.plist keys from
- README.md. Enter the server base URL and a device token from
- Fitness OS → Settings → Apple Health.
+ Build: create an iOS App (SwiftUI, iOS 17+) in Xcode, replace ContentView.swift
+ with this file, add the HealthKit capability and the background-delivery
+ entitlement, and run on a physical iPhone.
+
+ The app keeps HealthKit anchors, a persisted upload queue and a revocable device
+ token. It posts incremental samples to the Fitness OS Cloudflare Worker.
+
+ iOS does not guarantee immediate background delivery. "Sync delayed" is a
+ normal state; opening the app or the next HealthKit wake-up will flush it.
 */
 
 @main
@@ -18,163 +24,462 @@ struct HealthBridgeApp: App {
     }
 }
 
-@MainActor
-final class HealthBridge: ObservableObject {
-    @Published var status = "Not synced yet"
-    @Published var busy = false
-    @Published var log: [String] = []
+// MARK: - Keychain
 
+enum Keychain {
+    static func set(_ value: String, for key: String) {
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.fitnessos.healthbridge",
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func get(_ key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.fitnessos.healthbridge",
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func delete(_ key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.fitnessos.healthbridge",
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+// MARK: - Payload models
+
+struct StepSample: Codable {
+    let id: String
+    let start: String
+    let end: String
+    let steps: Int
+    let source: String
+    let device: String?
+}
+
+struct HeartRateSample: Codable {
+    let id: String
+    let start: String
+    let bpm: Double
+    let source: String
+    let device: String?
+}
+
+struct WorkoutRecord: Codable {
+    let id: String
+    let type: String
+    let start: String
+    let end: String
+    let durationSec: Double
+    let distanceKm: Double?
+    let avgHr: Double?
+    let maxHr: Double?
+    let activeCalories: Double?
+    let source: String
+    let device: String?
+}
+
+struct HealthPayload: Codable {
+    let version: Int
+    let source: String
+    let syncedAt: String
+    let samples: [StepSample]
+    let workouts: [WorkoutRecord]
+    let heartRateSamples: [HeartRateSample]
+    let deletedSampleIds: [String]
+    let deletedWorkoutIds: [String]
+    let deletedHeartRateIds: [String]
+    let deviceName: String
+
+    var isEmpty: Bool {
+        samples.isEmpty && workouts.isEmpty && heartRateSamples.isEmpty &&
+        deletedSampleIds.isEmpty && deletedWorkoutIds.isEmpty && deletedHeartRateIds.isEmpty
+    }
+}
+
+struct QueueItem: Codable, Identifiable {
+    let id: String
+    let createdAt: String
+    let payload: HealthPayload
+}
+
+// MARK: - Persisted queue
+
+final class UploadQueue {
+    static let shared = UploadQueue()
+    private let fileURL: URL
+    private(set) var items: [QueueItem] = []
+
+    private init() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        fileURL = dir.appendingPathComponent("fitnessos-upload-queue.json")
+        load()
+    }
+
+    private func load() {
+        guard let data = try? Data(contentsOf: fileURL),
+              let decoded = try? JSONDecoder().decode([QueueItem].self, from: data) else { return }
+        items = decoded
+    }
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(items) {
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    func append(_ payload: HealthPayload) {
+        guard !payload.isEmpty else { return }
+        items.append(QueueItem(id: UUID().uuidString, createdAt: ISO8601DateFormatter().string(from: Date()), payload: payload))
+        persist()
+    }
+
+    func remove(_ id: String) {
+        items.removeAll { $0.id == id }
+        persist()
+    }
+
+    var count: Int { items.count }
+}
+
+// MARK: - Manager
+
+@MainActor
+final class HealthSyncManager: ObservableObject {
     private let store = HKHealthStore()
+    private let defaults = UserDefaults.standard
+    private var observers: [HKObserverQuery] = []
+    private var syncing = false
+
+    @Published var status: String = "Not connected"
+    @Published var lastSync: Date?
+    @Published var pending: Int = 0
+    @Published var permissionGranted = false
+    @Published var lastObserverEvent: Date?
+    @Published var errorText: String?
+
+    private var apiBase: String { UserDefaults.standard.string(forKey: "fos.apiUrl") ?? "" }
+    private var token: String { Keychain.get("deviceToken") ?? "" }
 
     private var readTypes: Set<HKObjectType> {
         [
             HKObjectType.quantityType(forIdentifier: .stepCount)!,
+            HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!,
             HKObjectType.quantityType(forIdentifier: .heartRate)!,
             HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
-            HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!,
             HKObjectType.workoutType(),
         ]
     }
 
-    func requestAccess() async {
+    init() {
+        if let raw = defaults.string(forKey: "fos.lastSync"), let date = ISO8601DateFormatter().date(from: raw) {
+            lastSync = date
+        }
+        pending = UploadQueue.shared.count
+        refreshStatus()
+    }
+
+    func configure(apiUrl: String, deviceToken: String) {
+        UserDefaults.standard.set(apiUrl.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "fos.apiUrl")
+        Keychain.set(deviceToken.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "deviceToken")
+        refreshStatus()
+    }
+
+    func refreshStatus() {
+        if apiBase.isEmpty || token.isEmpty {
+            status = "Connection required"
+        } else if !permissionGranted {
+            status = "Permission required"
+        } else if let last = lastSync, Date().timeIntervalSince(last) < 3 * 3600 {
+            status = "Connected"
+        } else if lastSync != nil {
+            status = "Sync delayed"
+        } else {
+            status = "Connected — waiting for first sync"
+        }
+        pending = UploadQueue.shared.count
+    }
+
+    func requestAuthorization() async {
         guard HKHealthStore.isHealthDataAvailable() else {
-            status = "HealthKit is unavailable on this device."
+            status = "HealthKit unavailable"
             return
         }
         do {
             try await store.requestAuthorization(toShare: [], read: readTypes)
-            status = "Health access granted. Ready to sync."
+            permissionGranted = store.authorizationStatus(for: HKObjectType.quantityType(forIdentifier: .stepCount)!) == .sharingAuthorized
+                || store.authorizationStatus(for: HKObjectType.quantityType(forIdentifier: .stepCount)!) == .sharingDenied
+            // HealthKit does not reveal read authorization; a successful query is the real proof.
+            permissionGranted = true
+            refreshStatus()
+            startObservers()
+            await sync(reason: "authorization")
         } catch {
-            status = "Health access failed: \(error.localizedDescription)"
+            status = "Permission error"
+            errorText = error.localizedDescription
         }
     }
 
-    func sync(baseURL: String, token: String) async {
-        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines) + "/api/health/sync") else {
-            status = "Enter a valid base URL."
+    func startObservers() {
+        guard observers.isEmpty else { return }
+        let types: [(HKSampleType, HKUpdateFrequency)] = [
+            (HKObjectType.quantityType(forIdentifier: .stepCount)!, .immediate),
+            (HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!, .hourly),
+            (HKObjectType.quantityType(forIdentifier: .heartRate)!, .hourly),
+            (HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!, .hourly),
+            (HKObjectType.workoutType(), .immediate),
+        ]
+        for (type, frequency) in types {
+            let query = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, completion, _ in
+                Task { @MainActor in
+                    self?.lastObserverEvent = Date()
+                    self?.refreshStatus()
+                    await self?.sync(reason: "observer")
+                    completion()
+                }
+            }
+            store.execute(query)
+            observers.append(query)
+            store.enableBackgroundDelivery(for: type, frequency: frequency) { success, error in
+                if !success {
+                    Task { @MainActor in self.errorText = "Background delivery: \(error?.localizedDescription ?? "unavailable")" }
+                }
+            }
+        }
+    }
+
+    func sync(reason: String = "manual") async {
+        guard !syncing else { return }
+        guard !apiBase.isEmpty, !token.isEmpty else {
+            status = "Connection required"
             return
         }
-        guard !token.isEmpty else {
-            status = "Paste a device token from Settings."
-            return
-        }
+        syncing = true
+        defer { syncing = false }
+        status = "Syncing…"
+        errorText = nil
 
-        busy = true
-        defer { busy = false }
-        log = []
-
-        let calendar = Calendar.current
-        let now = Date()
-        let from = calendar.date(byAdding: .day, value: -3, to: now) ?? now.addingTimeInterval(-259_200)
+        var samples: [StepSample] = []
+        var heartRates: [HeartRateSample] = []
+        var deletedSampleIds: [String] = []
+        var deletedHeartRateIds: [String] = []
+        var workouts: [WorkoutRecord] = []
+        var deletedWorkoutIds: [String] = []
 
         do {
-            async let stepSamples = fetchStepSamples(from: from, to: now)
-            async let workouts = fetchWorkouts(from: from, to: now)
-
-            let payload: [String: Any] = [
-                "version": 1,
-                "source": "iPhone+AppleWatch",
-                "syncedAt": ISO8601DateFormatter().string(from: now),
-                "stepSamples": try await stepSamples,
-                "workouts": try await workouts,
-            ]
-
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { throw SyncError.badResponse }
-
-            if http.statusCode == 200 {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                status = "Synced at \(Date().formatted(date: .omitted, time: .shortened))"
-                log.append(body)
-            } else {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                status = "Server returned \(http.statusCode)"
-                log.append(body)
+            let stepData = try await fetchQuantity(type: .stepCount, unit: .count(), key: "anchor.steps")
+            for item in stepData.added {
+                guard let sample = item as? HKQuantitySample else { continue }
+                samples.append(StepSample(
+                    id: sample.uuid.uuidString,
+                    start: iso(sample.startDate),
+                    end: iso(sample.endDate),
+                    steps: Int(sample.quantity.doubleValue(for: .count()).rounded()),
+                    source: sample.sourceRevision.source.name,
+                    device: sample.device?.name
+                ))
             }
+            deletedSampleIds = stepData.deleted
+
+            let hrData = try await fetchQuantity(type: .heartRate, unit: HKUnit.count().unitDivided(by: .minute()), key: "anchor.heartRate")
+            for item in hrData.added {
+                guard let sample = item as? HKQuantitySample else { continue }
+                heartRates.append(HeartRateSample(
+                    id: sample.uuid.uuidString,
+                    start: iso(sample.startDate),
+                    bpm: sample.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute())),
+                    source: sample.sourceRevision.source.name,
+                    device: sample.device?.name
+                ))
+            }
+            deletedHeartRateIds = hrData.deleted
+
+            let workoutData = try await fetchWorkouts()
+            workouts = workoutData.added
+            deletedWorkoutIds = workoutData.deleted
         } catch {
-            status = "Sync failed: \(error.localizedDescription)"
+            status = "Sync error"
+            errorText = error.localizedDescription
+            refreshStatus()
+            return
+        }
+
+        let payload = HealthPayload(
+            version: 1,
+            source: UIDevice.current.name,
+            syncedAt: iso(Date()),
+            samples: samples,
+            workouts: workouts,
+            heartRateSamples: heartRates,
+            deletedSampleIds: deletedSampleIds,
+            deletedWorkoutIds: deletedWorkoutIds,
+            deletedHeartRateIds: deletedHeartRateIds,
+            deviceName: UIDevice.current.name
+        )
+        if !payload.isEmpty {
+            UploadQueue.shared.append(payload)
+        }
+        await flushQueue()
+        refreshStatus()
+        if reason == "manual" && errorText == nil {
+            status = "Synced"
         }
     }
 
-    private func fetchStepSamples(from: Date, to: Date) async throws -> [[String: Any]] {
-        guard let type = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return [] }
+    private func flushQueue() async {
+        var remaining = UploadQueue.shared.items
+        while let item = remaining.first {
+            do {
+                try await post(item.payload)
+                UploadQueue.shared.remove(item.id)
+                remaining.removeFirst()
+                lastSync = Date()
+                defaults.set(iso(lastSync!), forKey: "fos.lastSync")
+                pending = UploadQueue.shared.count
+            } catch {
+                errorText = error.localizedDescription
+                pending = UploadQueue.shared.count
+                // Keep the item for the next launch/observer. Do not advance past it.
+                break
+            }
+        }
+    }
+
+    private func post(_ payload: HealthPayload) async throws {
+        guard let url = URL(string: apiBase + "/api/health/sync") else {
+            throw SyncError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30
+        request.httpBody = try JSONEncoder().encode(payload)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw SyncError.badResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw SyncError.server(http.statusCode, body)
+        }
+    }
+
+    // MARK: Anchored queries
+
+    private struct QuantityResult {
+        let added: [HKSample]
+        let deleted: [String]
+    }
+
+    private func fetchQuantity(type identifier: HKQuantityTypeIdentifier, unit: HKUnit, key: String) async throws -> QuantityResult {
+        guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else {
+            return QuantityResult(added: [], deleted: [])
+        }
+        let anchorData = defaults.data(forKey: key)
+        let anchor = anchorData.flatMap { try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0) }
+        let start = lastSync ?? Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: nil, options: .strictStartDate)
 
         return try await withCheckedThrowingContinuation { continuation in
-            var results: [[String: Any]] = []
-            let query = HKSampleQuery(
-                sampleType: type,
-                predicate: HKQuery.predicateForSamples(withStart: from, end: to, options: .strictStartDate),
-                limit: HKObjectQueryNoLimit,
-                sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]
-            ) { _, samples, error in
+            let query = HKAnchoredObjectQuery(type: type, predicate: predicate, anchor: anchor, limit: HKObjectQueryNoLimit) { _, samples, deleted, newAnchor, error in
                 if let error {
                     continuation.resume(throwing: error)
                     return
                 }
-                for case let sample as HKQuantitySample in samples ?? [] {
-                    let steps = sample.quantity.doubleValue(for: HKUnit.count())
-                    results.append([
-                        "id": sample.uuid.uuidString,
-                        "start": ISO8601DateFormatter().string(from: sample.startDate),
-                        "end": ISO8601DateFormatter().string(from: sample.endDate),
-                        "steps": Int(steps.rounded()),
-                        "source": sample.sourceRevision.source.name,
-                        "device": sample.device?.name ?? "iPhone",
-                    ])
+                if let newAnchor, let data = try? NSKeyedArchiver.archivedData(withRootObject: newAnchor, requiringSecureCoding: true) {
+                    Task { @MainActor in self.defaults.set(data, forKey: key) }
                 }
-                continuation.resume(returning: results)
+                let deletedIds = (deleted ?? []).map { $0.uuid.uuidString }
+                continuation.resume(returning: QuantityResult(added: samples ?? [], deleted: deletedIds))
             }
             store.execute(query)
         }
     }
 
-    private func fetchWorkouts(from: Date, to: Date) async throws -> [[String: Any]] {
-        let predicate = HKQuery.predicateForSamples(withStart: from, end: to, options: .strictStartDate)
-        return try await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(
-                sampleType: .workoutType(),
-                predicate: predicate,
-                limit: HKObjectQueryNoLimit,
-                sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]
-            ) { [weak self] _, samples, error in
-                guard let self else { return }
+    private struct WorkoutResult {
+        let added: [WorkoutRecord]
+        let deleted: [String]
+    }
+
+    private func fetchWorkouts() async throws -> WorkoutResult {
+        let anchorData = defaults.data(forKey: "anchor.workouts")
+        let anchor = anchorData.flatMap { try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0) }
+        let start = lastSync ?? Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: nil, options: .strictStartDate)
+
+        let result: ([HKWorkout], [String], HKQueryAnchor?) = try await withCheckedThrowingContinuation { continuation in
+            let query = HKAnchoredObjectQuery(type: .workoutType(), predicate: predicate, anchor: anchor, limit: HKObjectQueryNoLimit) { _, samples, deleted, newAnchor, error in
                 if let error {
                     continuation.resume(throwing: error)
                     return
                 }
-                Task {
-                    var results: [[String: Any]] = []
-                    for case let workout as HKWorkout in samples ?? [] {
-                        var dict: [String: Any] = [
-                            "id": workout.uuid.uuidString,
-                            "type": Self.typeName(workout.workoutActivityType),
-                            "start": ISO8601DateFormatter().string(from: workout.startDate),
-                            "end": ISO8601DateFormatter().string(from: workout.endDate),
-                            "durationSec": workout.duration,
-                            "source": workout.sourceRevision.source.name,
-                            "device": workout.device?.name ?? "Apple Watch",
-                        ]
-                        if let distance = workout.totalDistance {
-                            dict["distanceKm"] = distance.doubleValue(for: HKUnit.km())
-                        }
-                        if let energy = workout.totalEnergyBurned {
-                            dict["activeCalories"] = energy.doubleValue(for: HKUnit.kilocalorie())
-                        }
-                        let hr = await self.heartRateStats(for: workout)
-                        if let avg = hr.avg { dict["avgHr"] = avg }
-                        if let max = hr.max { dict["maxHr"] = max }
-                        results.append(dict)
-                    }
-                    continuation.resume(returning: results)
-                }
+                let workouts = (samples ?? []).compactMap { $0 as? HKWorkout }
+                let deletedIds = (deleted ?? []).map { $0.uuid.uuidString }
+                continuation.resume(returning: (workouts, deletedIds, newAnchor))
             }
             store.execute(query)
+        }
+
+        if let anchor = result.2, let data = try? NSKeyedArchiver.archivedData(withRootObject: anchor, requiringSecureCoding: true) {
+            defaults.set(data, forKey: "anchor.workouts")
+        }
+
+        var records: [WorkoutRecord] = []
+        for workout in result.0 {
+            var dict = WorkoutRecord(
+                id: workout.uuid.uuidString,
+                type: workoutType(workout),
+                start: iso(workout.startDate),
+                end: iso(workout.endDate),
+                durationSec: workout.duration,
+                distanceKm: workout.totalDistance?.doubleValue(for: .meterUnit(with: .kilo)),
+                avgHr: nil,
+                maxHr: nil,
+                activeCalories: workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()),
+                source: workout.sourceRevision.source.name,
+                device: workout.device?.name
+            )
+            let hr = await heartRateStats(for: workout)
+            dict = WorkoutRecord(
+                id: dict.id, type: dict.type, start: dict.start, end: dict.end,
+                durationSec: dict.durationSec, distanceKm: dict.distanceKm,
+                avgHr: hr.avg, maxHr: hr.max, activeCalories: dict.activeCalories,
+                source: dict.source, device: dict.device
+            )
+            records.append(dict)
+        }
+        return WorkoutResult(added: records, deleted: result.1)
+    }
+
+    private func workoutType(_ workout: HKWorkout) -> String {
+        let indoor = (workout.metadata?[HKMetadataKeyIndoorWorkout] as? Bool) ?? false
+        switch workout.workoutActivityType {
+        case .walking: return indoor ? "indoor_walk" : "walking"
+        case .running: return indoor ? "indoor_run" : "running"
+        case .traditionalStrengthTraining, .functionalStrengthTraining: return "traditional_strength_training"
+        case .highIntensityIntervalTraining: return "hiit"
+        case .cycling: return "cycling"
+        case .yoga: return "yoga"
+        default: return "other"
         }
     }
 
@@ -182,11 +487,7 @@ final class HealthBridge: ObservableObject {
         guard let type = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return (nil, nil) }
         let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate, options: .strictStartDate)
         return await withCheckedContinuation { continuation in
-            let query = HKStatisticsQuery(
-                quantityType: type,
-                quantitySamplePredicate: predicate,
-                options: [.discreteAverage, .discreteMax]
-            ) { _, stats, _ in
+            let query = HKStatisticsQuery(quantityType: type, quantitySamplePredicate: predicate, options: [.discreteAverage, .discreteMax]) { _, stats, _ in
                 let unit = HKUnit.count().unitDivided(by: .minute())
                 continuation.resume(returning: (
                     stats?.averageQuantity()?.doubleValue(for: unit),
@@ -197,69 +498,100 @@ final class HealthBridge: ObservableObject {
         }
     }
 
-    private static func typeName(_ type: HKWorkoutActivityType) -> String {
-        switch type {
-        case .walking: return "walking"
-        case .running: return "running"
-        case .cycling: return "cycling"
-        case .traditionalStrengthTraining, .functionalStrengthTraining: return "traditional_strength_training"
-        case .highIntensityIntervalTraining: return "hiit"
-        case .yoga: return "yoga"
-        case .other: return "other"
-        default: return "other"
+    private func iso(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+}
+
+enum SyncError: LocalizedError {
+    case invalidURL
+    case badResponse
+    case server(Int, String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL: return "Invalid Worker URL"
+        case .badResponse: return "Invalid server response"
+        case .server(let code, let body): return "Server \(code): \(body.prefix(180))"
         }
     }
 }
 
-private enum SyncError: LocalizedError {
-    case badResponse
-    var errorDescription: String? { "The server returned an invalid response." }
-}
+// MARK: - UI
 
 struct ContentView: View {
-    @StateObject private var bridge = HealthBridge()
-    @AppStorage("fos.baseURL") private var baseURL = ""
-    @AppStorage("fos.token") private var token = ""
+    @StateObject private var manager = HealthSyncManager()
+    @AppStorage("fos.apiUrl") private var apiUrl = ""
+    @State private var token = ""
+    @State private var showToken = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Server") {
-                    TextField("https://fitness.example.com", text: $baseURL)
+                Section("Fitness OS connection") {
+                    TextField("https://fitnessos-api.…workers.dev", text: $apiUrl)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
-                    SecureField("Device token", text: $token)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    if showToken {
+                        TextField("Device token", text: $token)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } else {
+                        SecureField("Device token", text: $token)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    Button("Save connection") {
+                        manager.configure(apiUrl: apiUrl, deviceToken: token)
+                    }
+                    .disabled(apiUrl.isEmpty || token.isEmpty)
                 }
 
                 Section("Apple Health") {
                     Button("Grant Health access") {
-                        Task { await bridge.requestAccess() }
+                        Task { await manager.requestAuthorization() }
                     }
                     Button("Sync now") {
-                        Task { await bridge.sync(baseURL: baseURL, token: token) }
+                        Task { await manager.sync(reason: "manual") }
                     }
-                    .disabled(bridge.busy || baseURL.isEmpty || token.isEmpty)
+                    .disabled(apiUrl.isEmpty || token.isEmpty)
+                    Button("Enable background observers") {
+                        manager.startObservers()
+                    }
                 }
 
                 Section("Status") {
-                    Text(bridge.status).font(.footnote)
-                    ForEach(bridge.log, id: \.self) { line in
-                        Text(line)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                    LabeledContent("Status", value: manager.status)
+                    LabeledContent("Last sync", value: manager.lastSync?.formatted(date: .abbreviated, time: .shortened) ?? "Never")
+                    LabeledContent("Queued uploads", value: "\(manager.pending)")
+                    LabeledContent("Last HealthKit wake", value: manager.lastObserverEvent?.formatted(date: .omitted, time: .shortened) ?? "—")
+                    if let error = manager.errorText {
+                        Text(error).font(.caption).foregroundStyle(.red)
                     }
                 }
 
                 Section {
-                    Text("Incline and belt speed are not exposed by HealthKit. Log those in Fitness OS or use a supported treadmill integration. Active calories are estimates reported by Apple Health.")
+                    Text("iOS does not guarantee real-time HealthKit background uploads. If a sync is delayed, the queue is kept and retried on the next wake-up or when you open the app. Treadmill incline and belt speed are not available from HealthKit — log them in Fitness OS.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Fitness OS Bridge")
+            .task {
+                token = Keychain.get("deviceToken") ?? ""
+                manager.refreshStatus()
+                if !apiUrl.isEmpty && !token.isEmpty {
+                    manager.startObservers()
+                    await manager.sync(reason: "launch")
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    Task { await manager.sync(reason: "foreground") }
+                }
+            }
         }
     }
 }

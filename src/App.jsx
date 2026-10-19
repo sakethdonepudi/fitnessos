@@ -1,7 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useApp } from './state.jsx';
-import { TopBar, BottomNav, DemoBanner, Toasts } from './components/shell.jsx';
+import { TopBar, BottomNav, OfflineBanner, Toasts } from './components/shell.jsx';
 import AuthPage from './pages/AuthPage.jsx';
 import TodayPage from './pages/TodayPage.jsx';
 import TransformationPage from './pages/TransformationPage.jsx';
@@ -11,6 +11,7 @@ import NutritionPage from './pages/NutritionPage.jsx';
 import ProgressPhotosPage from './pages/ProgressPhotosPage.jsx';
 import EvidencePage from './pages/EvidencePage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
+import UpdatePrompt from './components/UpdatePrompt.jsx';
 
 export default function App() {
   const { user, bootstrapped } = useApp();
@@ -28,6 +29,7 @@ export default function App() {
       <>
         <AuthPage />
         <Toasts />
+        <UpdatePrompt />
       </>
     );
   }
@@ -35,7 +37,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <TopBar />
-      <DemoBanner />
+      <OfflineBanner />
       <main className="app-main">
         <Routes>
           <Route path="/" element={<TodayPage />} />
@@ -51,6 +53,7 @@ export default function App() {
       </main>
       <BottomNav />
       <Toasts />
+      <UpdatePrompt />
     </div>
   );
 }

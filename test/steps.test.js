@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { attributeSteps } from '../server/lib/steps.js';
-import { localDateKey, localDayBounds, addDaysKey, weekStartKey, daysBetween } from '../server/lib/dates.js';
+import { attributeSteps } from '../shared/steps.js';
+import { localDateKey, localDayBounds, addDaysKey, weekStartKey, daysBetween } from '../shared/dates.js';
 
 test('localDayBounds is correct for Asia/Kolkata', () => {
   const { start, end } = localDayBounds('2026-10-19', 'Asia/Kolkata');

@@ -18,19 +18,19 @@ import {
 } from '../components/icons.jsx';
 import { fmtNum, fmtDate, fmtMinutes, fmtWeekday, addDays, daysBetween } from '../lib/format.js';
 
-const SPLIT_ORDER = ['Push', 'Pull', 'Legs', 'Recovery', 'Shoulders', 'Arms', 'Rest'];
+const SPLIT_ORDER = ['Push', 'Pull', 'Legs + Abs', 'Recovery', 'Shoulders', 'Arms + Accessories', 'Rest'];
 const SPLIT_SUGGESTIONS = {
   Push: ['Incline DB Press', 'Cable Fly', 'Overhead Press', 'Lateral Raise'],
   Pull: ['Lat Pulldown', 'Chest-Supported Row', 'Face Pull', 'Curl'],
-  Legs: ['Hack Squat', 'Romanian Deadlift', 'Leg Extension', 'Calf Raise'],
+  'Legs + Abs': ['Hack Squat', 'Romanian Deadlift', 'Leg Extension', 'Calf Raise', 'Cable Crunch', 'Hanging Knee Raise'],
   Recovery: [],
   Shoulders: ['Shoulder Press', 'Lateral Raise', 'Rear Delt Fly'],
-  Arms: ['Curl', 'Triceps Pushdown', 'Hammer Curl'],
+  'Arms + Accessories': ['Curl', 'Triceps Pushdown', 'Hammer Curl', 'Lateral Raise', 'Face Pull'],
   Rest: [],
 };
 
 export default function TrainingPage() {
-  const { toast, bootstrap } = useApp();
+  const { toast, bootstrap, dataVersion } = useApp();
   const [workouts, setWorkouts] = useState([]);
   const [strength, setStrength] = useState(null);
   const [recovery, setRecovery] = useState({ rows: [], trend: null });
@@ -59,7 +59,7 @@ export default function TrainingPage() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [dataVersion]);
 
   const today = bootstrap?.today;
   const todaySchedule = schedule?.days.find((d) => d.isToday);

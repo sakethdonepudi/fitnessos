@@ -30,7 +30,7 @@ const GOAL_ICONS = {
 };
 
 export default function EvidencePage() {
-  const { bootstrap, toast } = useApp();
+  const { bootstrap, toast, dataVersion } = useApp();
   const [tab, setTab] = useState('today');
   const [evidence, setEvidence] = useState(null);
   const [checkpoints, setCheckpoints] = useState([]);
@@ -57,7 +57,7 @@ export default function EvidencePage() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [dataVersion]);
 
   const openCheckpoint = async (date) => {
     try {

@@ -14,6 +14,7 @@ import {
   IconPlus,
   IconTrash,
   IconFlame,
+  IconEdit,
 } from '../components/icons.jsx';
 import { fmtNum, fmtPct, fmtDate, fmtWeekday, addDays, todayKeyLocal } from '../lib/format.js';
 
@@ -21,7 +22,7 @@ const SLOTS = ['breakfast', 'lunch', 'dinner', 'snack', 'meal'];
 const SLOT_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack', meal: 'Other' };
 
 export default function NutritionPage() {
-  const { bootstrap, toast } = useApp();
+  const { bootstrap, toast, dataVersion } = useApp();
   const [date, setDate] = useState(bootstrap?.today || todayKeyLocal());
   const [tab, setTab] = useState('day');
   const [day, setDay] = useState(null);
@@ -29,17 +30,22 @@ export default function NutritionPage() {
   const [recipes, setRecipes] = useState([]);
   const [modal, setModal] = useState(null);
   const [recipeModal, setRecipeModal] = useState(false);
+  const [foods, setFoods] = useState([]);
+  const [foodModal, setFoodModal] = useState(false);
+  const [editingFood, setEditingFood] = useState(null);
 
   const load = async () => {
     try {
-      const [d, w, r] = await Promise.all([
+      const [d, w, r, f] = await Promise.all([
         api.get(`/meals?date=${date}`),
         api.get(`/nutrition/week?to=${bootstrap?.today || date}`),
         api.get('/recipes'),
+        api.get('/foods'),
       ]);
       setDay(d);
       setWeek(w);
       setRecipes(r);
+      setFoods(f.foods || []);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -47,7 +53,7 @@ export default function NutritionPage() {
 
   useEffect(() => {
     load();
-  }, [date]);
+  }, [date, dataVersion]);
 
   const goal = day?.goal || bootstrap?.goal;
   const waterLogs = useMemo(() => [], []);
@@ -61,7 +67,7 @@ export default function NutritionPage() {
 
   useEffect(() => {
     loadWater();
-  }, [date]);
+  }, [date, dataVersion]);
 
   const totals = day?.totals || { calories: 0, protein: 0, carbs: 0, fat: 0 };
   const hasMeals = (day?.meals?.length || 0) > 0;
@@ -93,6 +99,35 @@ export default function NutritionPage() {
     try {
       await api.del(`/water/${id}`);
       await loadWater();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  const addFoodToDay = async (food) => {
+    try {
+      await api.post('/meals', {
+        date,
+        slot: 'meal',
+        name: food.name,
+        calories: food.calories,
+        protein: food.protein_g,
+        carbs: food.carbs_g,
+        fat: food.fat_g,
+        notes: `From food library · ${food.serving}`,
+      });
+      toast('Food added to the day', 'success');
+      load();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  const removeFood = async (id) => {
+    try {
+      await api.del(`/foods/${id}`);
+      toast('Food removed', 'success');
+      load();
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -152,6 +187,7 @@ export default function NutritionPage() {
           { id: 'day', label: 'Day' },
           { id: 'week', label: 'Week' },
           { id: 'recipes', label: 'Recipes', count: recipes.length },
+          { id: 'foods', label: 'Foods', count: foods.length },
         ]}
       />
 
@@ -398,8 +434,8 @@ export default function NutritionPage() {
                       </div>
                       {r.ingredients?.length > 0 && (
                         <div className="recipe-ingredients">
-                          {r.ingredients.map((i) => (
-                            <span className="chip" key={i.id}>{i.name} {i.quantity}{i.unit}</span>
+                          {r.ingredients.map((i, idx) => (
+                            <span className="chip" key={i.id || `${i.name}-${idx}`}>{i.name} {i.quantity}{i.unit}</span>
                           ))}
                         </div>
                       )}
@@ -425,7 +461,53 @@ export default function NutritionPage() {
         </div>
       )}
 
+      {tab === 'foods' && (
+        <div className="recipes-grid">
+          <Panel
+            title="Food library"
+            sub="Editable portions and macros. All totals are calculated from what you record."
+            action={<Button size="sm" onClick={() => { setEditingFood(null); setFoodModal(true); }}><IconPlus size={14} /> New food</Button>}
+            flush
+          >
+            {foods.length === 0 ? (
+              <Empty icon={<IconMeal size={20} />} title="No foods yet">Add rice, dal, curry, whey, curd, paneer, tofu or soya.</Empty>
+            ) : (
+              <div className="recipe-list">
+                {foods.map((food) => (
+                  <div className="recipe-card" key={food.id}>
+                    <div className="recipe-card-main">
+                      <div className="recipe-name">{food.name}</div>
+                      <div className="tiny dim">
+                        {food.serving} · {fmtNum(food.calories)} kcal · P {fmtNum(food.protein_g)} · C {fmtNum(food.carbs_g)} · F {fmtNum(food.fat_g)}
+                        {food.category ? ` · ${food.category}` : ''}
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 4 }}>
+                      <Button size="sm" variant="ghost" onClick={() => addFoodToDay(food)}>Log</Button>
+                      <button className="icon-btn" onClick={() => { setEditingFood(food); setFoodModal(true); }} aria-label="Edit food"><IconEdit size={14} /></button>
+                      <button className="icon-btn" onClick={() => removeFood(food.id)} aria-label="Delete food"><IconTrash size={14} /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+          <Panel title="Vegetarian defaults" sub="Keep these editable">
+            <div className="stack" style={{ gap: 9 }}>
+              <p className="small muted">
+                Default foods include cooked rice, dal tadka, vegetable curry, whey, curd, air-fryer paneer, tofu and soya.
+                Edit the portion or macros to match your kitchen.
+              </p>
+              <Note tone="info" icon={<IconInfo size={14} />}>
+                A food logged to a day is user-reported. It never becomes device-verified nutrition.
+              </Note>
+            </div>
+          </Panel>
+        </div>
+      )}
+
       <MealModal open={modal === 'meal'} onClose={() => setModal(null)} onSaved={load} date={date} />
+      <FoodModal open={foodModal} onClose={() => { setFoodModal(false); setEditingFood(null); }} onSaved={load} initial={editingFood} />
       <WaterModal open={modal === 'water'} onClose={() => setModal(null)} onSaved={loadWater} date={date} />
       <RecipeModal open={recipeModal} onClose={() => setRecipeModal(false)} onSaved={load} />
     </div>
@@ -514,6 +596,79 @@ function RecipeModal({ open, onClose, onSaved }) {
       <div className="form-actions">
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" onClick={save} disabled={busy || !form.name.trim()}>Save recipe</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function FoodModal({ open, onClose, onSaved, initial }) {
+  const { toast } = useApp();
+  const [form, setForm] = useState({ name: '', serving: '150 g', calories: '', protein_g: '', carbs_g: '', fat_g: '', category: 'Staple' });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setForm(
+        initial
+          ? {
+              name: initial.name || '',
+              serving: initial.serving || '1 serving',
+              calories: initial.calories ?? '',
+              protein_g: initial.protein_g ?? '',
+              carbs_g: initial.carbs_g ?? '',
+              fat_g: initial.fat_g ?? '',
+              category: initial.category || 'Staple',
+            }
+          : { name: '', serving: '150 g', calories: '', protein_g: '', carbs_g: '', fat_g: '', category: 'Staple' }
+      );
+    }
+  }, [open, initial]);
+
+  const save = async () => {
+    if (!form.name.trim()) return toast('Give the food a name', 'error');
+    setBusy(true);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        serving: form.serving,
+        calories: Number(form.calories) || 0,
+        protein_g: Number(form.protein_g) || 0,
+        carbs_g: Number(form.carbs_g) || 0,
+        fat_g: Number(form.fat_g) || 0,
+        category: form.category,
+      };
+      if (initial?.id) await api.put(`/foods/${initial.id}`, payload);
+      else await api.post('/foods', payload);
+      toast(initial?.id ? 'Food updated' : 'Food added', 'success');
+      onSaved?.();
+      onClose();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={initial ? 'Edit food' : 'New food'} sub="Portion and macros are yours to edit.">
+      <div className="form-grid">
+        <Field label="Name" style={{ gridColumn: '1 / -1' }}>
+          <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Dal tadka" />
+        </Field>
+        <Field label="Serving"><input className="input" value={form.serving} onChange={(e) => setForm({ ...form, serving: e.target.value })} placeholder="150 g" /></Field>
+        <Field label="Category">
+          <select className="select" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+            <option>Staple</option><option>Protein</option><option>Vegetable</option><option>Supplement</option><option>Other</option>
+          </select>
+        </Field>
+        <Field label="Calories"><input className="input" type="number" value={form.calories} onChange={(e) => setForm({ ...form, calories: e.target.value })} /></Field>
+        <Field label="Protein (g)"><input className="input" type="number" value={form.protein_g} onChange={(e) => setForm({ ...form, protein_g: e.target.value })} /></Field>
+        <Field label="Carbs (g)"><input className="input" type="number" value={form.carbs_g} onChange={(e) => setForm({ ...form, carbs_g: e.target.value })} /></Field>
+        <Field label="Fat (g)"><input className="input" type="number" value={form.fat_g} onChange={(e) => setForm({ ...form, fat_g: e.target.value })} /></Field>
+      </div>
+      <div className="form-actions">
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={save} disabled={busy}>Save food</Button>
       </div>
     </Modal>
   );

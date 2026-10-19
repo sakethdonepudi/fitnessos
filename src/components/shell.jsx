@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useApp } from '../state.jsx';
 import { initials } from '../lib/format.js';
@@ -12,6 +12,8 @@ import {
   IconCamera,
   IconMeal,
   IconSettings,
+  IconCloud,
+  IconRefreshCw,
   IconMenu,
   IconX,
 } from './icons.jsx';
@@ -28,7 +30,7 @@ const NAV = [
 ];
 
 export function TopBar() {
-  const { user, logout } = useApp();
+  const { user, sync } = useApp();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -70,15 +72,13 @@ export function TopBar() {
         </button>
 
         <div className="topbar-actions">
-          <span className="tiny dim" style={{ display: 'none' }}>
-            {location.pathname}
-          </span>
-          <div className="avatar" title={user?.name || ''}>
+          <SyncIndicator sync={sync} />
+          <NavLink to="/settings" className="avatar" title={`${user?.name || 'Owner'} · Settings`}>
             {initials(user?.name || 'F')}
-          </div>
-          <button className="icon-btn" onClick={logout} aria-label="Sign out" title="Sign out">
-            <IconLogout size={17} />
-          </button>
+          </NavLink>
+          <NavLink to="/settings" className="icon-btn" aria-label="Settings" title="Settings">
+            <IconSettings size={17} />
+          </NavLink>
         </div>
       </div>
 
@@ -120,13 +120,52 @@ export function BottomNav() {
   );
 }
 
-export function DemoBanner() {
-  const { user } = useApp();
-  if (!user?.isDemo) return null;
+export function SyncIndicator({ sync }) {
+  const status = sync?.status || 'local';
+  const labels = {
+    synced: 'Synced',
+    syncing: 'Syncing',
+    offline: 'Offline',
+    local: sync?.configured ? 'Local only' : 'Local',
+    error: 'Sync error',
+    idle: sync?.configured ? 'Ready' : 'Local',
+  };
+  const tone = {
+    synced: 'var(--lime)',
+    syncing: 'var(--teal)',
+    offline: 'var(--amber)',
+    local: 'var(--text-dim)',
+    error: 'var(--red)',
+    idle: 'var(--text-dim)',
+  }[status];
+  const label = labels[status] || 'Local';
   return (
-    <div className="demo-banner">
-      <span aria-hidden="true">◆</span>
-      Demo mode — every number on this screen is clearly labelled synthetic sample data, not your real progress.
+    <span className="sync-pill" title={sync?.error || `${sync?.pending || 0} change(s) queued`}>
+      <span className="sync-dot" style={{ background: tone, boxShadow: status === 'error' ? '0 0 8px rgba(255,107,107,.6)' : status === 'synced' ? '0 0 8px rgba(198,255,74,.5)' : 'none' }} />
+      <span className="sync-label">{label}</span>
+      {sync?.pending > 0 && <span className="sync-count">{sync.pending}</span>}
+      {status === 'syncing' && <span className="spinner" style={{ width: 9, height: 9, borderWidth: 1.5 }} />}
+    </span>
+  );
+}
+
+export function OfflineBanner() {
+  const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+  if (online) return null;
+  return (
+    <div className="offline-banner" role="status">
+      <span aria-hidden="true">●</span>
+      Offline — showing cached data. Changes are queued and will sync when you reconnect.
     </div>
   );
 }

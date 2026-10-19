@@ -1,47 +1,60 @@
 import React, { useState } from 'react';
 import { useApp } from '../state.jsx';
-import { Button, Field } from '../components/ui.jsx';
-import { IconShield, IconTreadmill, IconChart, IconCamera } from '../components/icons.jsx';
+import { Button, Field, Note } from '../components/ui.jsx';
+import { IconShield, IconTreadmill, IconChart, IconCloud, IconLock, IconInfo } from '../components/icons.jsx';
+
+const today = () => new Date().toISOString().slice(0, 10);
 
 export default function AuthPage() {
-  const { login, register } = useApp();
-  const [mode, setMode] = useState('login');
+  const { createProfile, loginCloud, toast } = useApp();
+  const [mode, setMode] = useState('create');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [cloudEnabled, setCloudEnabled] = useState(false);
   const [form, setForm] = useState({
-    email: '',
-    password: '',
     name: '',
     startDate: '2026-10-19',
+    checkpointDate: '2026-12-01',
     heightCm: 183,
-    waistCm: 91.4,
+    waistCm: 91.44,
     calories: 2400,
     protein: 175,
+    waterMl: 3250,
     stepGoal: 10000,
+    targetWeightKg: 84,
+    apiUrl: '',
+    passphrase: '',
+    setupToken: '',
   });
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
-  const submit = async (e) => {
+  const submitCreate = async (e) => {
     e.preventDefault();
     setError(null);
+    if (!form.name.trim()) return setError('Give your profile a name.');
+    if (cloudEnabled && (!form.apiUrl.trim() || !form.passphrase)) {
+      return setError('Enter the Worker URL and a sync passphrase, or turn cloud sync off.');
+    }
     setBusy(true);
     try {
-      if (mode === 'login') {
-        await login(form.email.trim(), form.password);
-      } else {
-        await register({
-          email: form.email.trim(),
-          password: form.password,
+      await createProfile(
+        {
           name: form.name.trim(),
           startDate: form.startDate,
-          heightCm: Number(form.heightCm),
-          waistCm: Number(form.waistCm),
-          calories: Number(form.calories),
-          protein: Number(form.protein),
-          stepGoal: Number(form.stepGoal),
-        });
-      }
+          checkpointDate: form.checkpointDate,
+          heightCm: form.heightCm,
+          waistCm: form.waistCm,
+          calories: form.calories,
+          protein: form.protein,
+          waterMl: form.waterMl,
+          stepGoal: form.stepGoal,
+          targetWeightKg: form.targetWeightKg,
+        },
+        cloudEnabled
+          ? { apiUrl: form.apiUrl, passphrase: form.passphrase, setupToken: form.setupToken || null }
+          : null
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -49,17 +62,20 @@ export default function AuthPage() {
     }
   };
 
-  const useDemo = async () => {
-    setBusy(true);
+  const submitLogin = async (e) => {
+    e.preventDefault();
     setError(null);
+    if (!form.apiUrl.trim() || !form.passphrase) return setError('Enter the Worker URL and your sync passphrase.');
+    setBusy(true);
     try {
-      await login('demo@fitness.local', 'demo12345');
+      const result = await loginCloud({ apiUrl: form.apiUrl, passphrase: form.passphrase });
+      if (result.needsProfile) {
+        toast('Connected. Create your profile to finish setup.', 'success');
+        setMode('create');
+        setCloudEnabled(true);
+      }
     } catch (err) {
-      setError(
-        err.status === 401
-          ? 'Demo account is not seeded yet. Run `npm run seed:demo` in the project root.'
-          : err.message
-      );
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -86,10 +102,9 @@ export default function AuthPage() {
             <br />
             <span style={{ color: 'var(--lime)' }}>long game.</span>
           </h1>
-          <p className="muted" style={{ maxWidth: '46ch', marginTop: 18, fontSize: 14 }}>
-            A private operating system for the October 19 → December 1 block. Treadmill work, steps,
-            nutrition, strength and recovery — measured honestly, with every number labelled by how it
-            was actually obtained.
+          <p className="muted" style={{ maxWidth: '48ch', marginTop: 18, fontSize: 14 }}>
+            A private operating system for the October 19 → December 1 block. Local-first on this device, with optional
+            encrypted cloud sync across your iPhone and Mac.
           </p>
 
           <div className="auth-features">
@@ -115,17 +130,16 @@ export default function AuthPage() {
               </div>
             </div>
             <div className="auth-feature">
-              <span className="auth-feature-icon"><IconCamera size={18} /></span>
+              <span className="auth-feature-icon"><IconCloud size={18} /></span>
               <div>
-                <div className="auth-feature-title">Private by design</div>
-                <div className="auth-feature-copy">Progress photos stay on your machine, behind your login.</div>
+                <div className="auth-feature-title">Optional cloud sync</div>
+                <div className="auth-feature-copy">Cloudflare Workers + D1 keep devices aligned. The app still works offline.</div>
               </div>
             </div>
           </div>
 
           <p className="tiny dim" style={{ marginTop: 36, maxWidth: '50ch' }}>
-            Not medical advice. This tool will not recommend crash dieting, dehydration or punishing
-            cardio volume.
+            Not medical advice. This tool will not recommend crash dieting, dehydration or punishing cardio volume.
           </p>
         </div>
       </div>
@@ -133,119 +147,110 @@ export default function AuthPage() {
       <div className="auth-form-side">
         <div className="auth-card">
           <div className="segmented" style={{ width: '100%', marginBottom: 22 }}>
-            <button
-              type="button"
-              aria-pressed={mode === 'login'}
-              onClick={() => setMode('login')}
-              style={{ flex: 1 }}
-            >
-              Sign in
+            <button type="button" aria-pressed={mode === 'create'} onClick={() => setMode('create')} style={{ flex: 1 }}>
+              Create profile
             </button>
-            <button
-              type="button"
-              aria-pressed={mode === 'register'}
-              onClick={() => setMode('register')}
-              style={{ flex: 1 }}
-            >
-              Create account
+            <button type="button" aria-pressed={mode === 'login'} onClick={() => setMode('login')} style={{ flex: 1 }}>
+              Connect account
             </button>
           </div>
 
           <h2 className="section-title" style={{ fontSize: 21, marginBottom: 6 }}>
-            {mode === 'login' ? 'Welcome back' : 'Set up your block'}
+            {mode === 'create' ? 'Set up your block' : 'Sign in to sync'}
           </h2>
-          <p className="small muted" style={{ marginBottom: 22 }}>
-            {mode === 'login'
-              ? 'Your data never leaves this machine.'
-              : 'These become your starting goals. You can change any of them later.'}
+          <p className="small muted" style={{ marginBottom: 20 }}>
+            {mode === 'create'
+              ? 'Your data stays on this device. Cloud sync is optional and can be added later.'
+              : 'Pull your records from Cloudflare D1 onto this device.'}
           </p>
 
-          <form onSubmit={submit} className="stack" style={{ gap: 14 }}>
-            {mode === 'register' && (
+          {mode === 'create' ? (
+            <form onSubmit={submitCreate} className="stack" style={{ gap: 13 }}>
               <Field label="Name">
-                <input className="input" value={form.name} onChange={set('name')} required autoComplete="name" />
+                <input className="input" value={form.name} onChange={set('name')} required autoComplete="name" placeholder="Your name" />
               </Field>
-            )}
-            <Field label="Email">
-              <input
-                className="input"
-                type="email"
-                value={form.email}
-                onChange={set('email')}
-                required
-                autoComplete="email"
-                placeholder="you@example.com"
-              />
-            </Field>
-            <Field label="Password" hint={mode === 'register' ? 'At least 8 characters.' : undefined}>
-              <input
-                className="input"
-                type="password"
-                value={form.password}
-                onChange={set('password')}
-                required
-                minLength={mode === 'register' ? 8 : undefined}
-                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-              />
-            </Field>
-
-            {mode === 'register' && (
               <div className="form-grid">
-                <Field label="Start date">
-                  <input className="input" type="date" value={form.startDate} onChange={set('startDate')} />
-                </Field>
-                <Field label="Height (cm)">
-                  <input className="input" type="number" value={form.heightCm} onChange={set('heightCm')} />
-                </Field>
-                <Field label="Waist (cm)">
-                  <input className="input" type="number" step="0.1" value={form.waistCm} onChange={set('waistCm')} />
-                </Field>
-                <Field label="Calories">
-                  <input className="input" type="number" value={form.calories} onChange={set('calories')} />
-                </Field>
-                <Field label="Protein (g)">
-                  <input className="input" type="number" value={form.protein} onChange={set('protein')} />
-                </Field>
-                <Field label="Step goal">
-                  <input className="input" type="number" value={form.stepGoal} onChange={set('stepGoal')} />
-                </Field>
+                <Field label="Start date"><input className="input" type="date" value={form.startDate} onChange={set('startDate')} /></Field>
+                <Field label="Checkpoint"><input className="input" type="date" value={form.checkpointDate} onChange={set('checkpointDate')} /></Field>
+                <Field label="Height (cm)"><input className="input" type="number" value={form.heightCm} onChange={set('heightCm')} /></Field>
+                <Field label="Waist (cm)"><input className="input" type="number" step="0.1" value={form.waistCm} onChange={set('waistCm')} /></Field>
+                <Field label="Calories"><input className="input" type="number" value={form.calories} onChange={set('calories')} /></Field>
+                <Field label="Protein (g)"><input className="input" type="number" value={form.protein} onChange={set('protein')} /></Field>
+                <Field label="Water (ml)"><input className="input" type="number" value={form.waterMl} onChange={set('waterMl')} /></Field>
+                <Field label="Step goal"><input className="input" type="number" value={form.stepGoal} onChange={set('stepGoal')} /></Field>
+                <Field label="Target weight (kg)"><input className="input" type="number" step="0.1" value={form.targetWeightKg} onChange={set('targetWeightKg')} /></Field>
               </div>
-            )}
 
-            {error && (
-              <div
-                className="small"
-                style={{
-                  color: '#ffa3a3',
-                  background: 'rgba(255,107,107,0.09)',
-                  border: '1px solid rgba(255,107,107,0.24)',
-                  borderRadius: 10,
-                  padding: '9px 11px',
-                }}
-              >
-                {error}
-              </div>
-            )}
+              <label className="checkbox" style={{ marginTop: 4 }}>
+                <input type="checkbox" checked={cloudEnabled} onChange={(e) => setCloudEnabled(e.target.checked)} />
+                Add encrypted cloud sync across devices
+              </label>
 
-            <Button variant="primary" size="lg" type="submit" disabled={busy} style={{ width: '100%', marginTop: 4 }}>
-              {busy ? <span className="spinner" /> : mode === 'login' ? 'Sign in' : 'Create account'}
-            </Button>
-          </form>
+              {cloudEnabled && (
+                <div className="stack" style={{ gap: 11, padding: 12, borderRadius: 12, border: '1px solid var(--line)', background: 'rgba(0,0,0,0.2)' }}>
+                  <Field label="Worker URL" hint="Example: https://fitnessos-api.your-subdomain.workers.dev">
+                    <input className="input" value={form.apiUrl} onChange={set('apiUrl')} placeholder="https://…workers.dev" />
+                  </Field>
+                  <Field label="Sync passphrase" hint="At least 12 characters. Used for the cloud account, not stored in the bundle.">
+                    <input className="input" type="password" value={form.passphrase} onChange={set('passphrase')} autoComplete="new-password" />
+                  </Field>
+                  <Field label="Setup token" hint="Only for the first account. From the Worker SETUP_TOKEN secret.">
+                    <input className="input" value={form.setupToken} onChange={set('setupToken')} placeholder="Optional if the account already exists" />
+                  </Field>
+                  <div className="tiny dim" style={{ display: 'flex', gap: 7, alignItems: 'flex-start' }}>
+                    <IconLock size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+                    Cloud records are private to your account. Photos are stored in a private R2 bucket and served only
+                    through authenticated requests.
+                  </div>
+                </div>
+              )}
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0' }}>
-            <hr className="divider" style={{ flex: 1 }} />
-            <span className="tiny dim">or</span>
-            <hr className="divider" style={{ flex: 1 }} />
-          </div>
+              {error && <ErrorBox message={error} />}
+              <Button variant="primary" size="lg" type="submit" disabled={busy} style={{ width: '100%', marginTop: 4 }}>
+                {busy ? <span className="spinner" /> : cloudEnabled ? 'Create profile & connect' : 'Create private profile'}
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={submitLogin} className="stack" style={{ gap: 13 }}>
+              <Field label="Worker URL" hint="Your deployed Cloudflare Worker base URL.">
+                <input className="input" value={form.apiUrl} onChange={set('apiUrl')} placeholder="https://…workers.dev" required />
+              </Field>
+              <Field label="Sync passphrase">
+                <input className="input" type="password" value={form.passphrase} onChange={set('passphrase')} autoComplete="current-password" required />
+              </Field>
+              {error && <ErrorBox message={error} />}
+              <Button variant="primary" size="lg" type="submit" disabled={busy} style={{ width: '100%', marginTop: 4 }}>
+                {busy ? <span className="spinner" /> : 'Sign in & pull records'}
+              </Button>
+              <Note tone="info" icon={<IconInfo size={14} />}>
+                Signing in does not delete anything on this device. Incoming records are merged; conflicts are resolved
+                per field and logged.
+              </Note>
+            </form>
+          )}
 
-          <Button variant="ghost" onClick={useDemo} disabled={busy} style={{ width: '100%' }}>
-            Explore with sample data
-          </Button>
-          <p className="tiny dim" style={{ marginTop: 10, textAlign: 'center' }}>
-            Opens a separate demo account. Synthetic data is labelled everywhere.
+          <p className="tiny dim" style={{ marginTop: 16, textAlign: 'center' }}>
+            No account? Create a private local profile and add cloud sync later in Settings.
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ErrorBox({ message }) {
+  return (
+    <div
+      className="small"
+      style={{
+        color: '#ffa3a3',
+        background: 'rgba(255,107,107,0.09)',
+        border: '1px solid rgba(255,107,107,0.24)',
+        borderRadius: 10,
+        padding: '9px 11px',
+      }}
+    >
+      {message}
     </div>
   );
 }

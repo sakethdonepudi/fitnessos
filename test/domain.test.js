@@ -4,12 +4,12 @@ import assert from 'node:assert/strict';
 process.env.DB_PATH = ':memory:';
 process.env.FITNESS_DATA_DIR = '.context/test-data';
 
-const { db, nowIso } = await import('../server/db.js');
-const { createUser } = await import('../server/auth.js');
-const { rollingAverageSeries, projectWeight, strengthRetention, adherenceWindow, currentGoal } = await import('../server/lib/metrics.js');
-const { buildSnapshot, createCheckpoint, hydrate, reconcileCheckpoint } = await import('../server/lib/checkpoint.js');
-const { ingestHealthSync, recomputeStepsForDate } = await import('../server/lib/sync.js');
-const { coach } = await import('../server/lib/coach.js');
+const { db, nowIso } = await import('../legacy/server/db.js');
+const { createUser } = await import('../legacy/server/auth.js');
+const { rollingAverageSeries, projectWeight, strengthRetention, adherenceWindow, currentGoal } = await import('../legacy/server/lib/metrics.js');
+const { buildSnapshot, createCheckpoint, hydrate, reconcileCheckpoint } = await import('../legacy/server/lib/checkpoint.js');
+const { ingestHealthSync, recomputeStepsForDate } = await import('../legacy/server/lib/sync.js');
+const { coach } = await import('../legacy/server/lib/coach.js');
 
 function makeUser(email, isDemo = false) {
   const id = createUser({ email, password: 'password123', name: 'Test User', timezone: 'Asia/Kolkata', isDemo });

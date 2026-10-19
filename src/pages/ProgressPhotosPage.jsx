@@ -12,6 +12,7 @@ import {
   IconShield,
 } from '../components/icons.jsx';
 import { fmtDate } from '../lib/format.js';
+import { PhotoImage } from '../components/PhotoImage.jsx';
 
 const ANGLES = [
   { id: 'front', label: 'Front' },
@@ -28,7 +29,7 @@ function mondayOf(date = new Date()) {
 }
 
 export default function ProgressPhotosPage() {
-  const { toast, bootstrap } = useApp();
+  const { toast, bootstrap, dataVersion } = useApp();
   const [photos, setPhotos] = useState([]);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadAngle, setUploadAngle] = useState('front');
@@ -52,7 +53,7 @@ export default function ProgressPhotosPage() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [dataVersion]);
 
   const byWeek = useMemo(() => {
     const map = new Map();
@@ -132,19 +133,19 @@ export default function ProgressPhotosPage() {
               mode === 'side' ? (
                 <div className="photo-compare photo-compare-lg">
                   <figure className="photo-frame">
-                    <img src={`/api/photos/${photoA.photo_id}`} alt={`${compareAngle} ${effectiveA}`} />
+                    <PhotoImage photoId={photoA.photo_id} alt={`${compareAngle} ${effectiveA}`} />
                     <figcaption className="photo-label">{fmtDate(effectiveA)}</figcaption>
                   </figure>
                   <figure className="photo-frame">
-                    <img src={`/api/photos/${photoB.photo_id}`} alt={`${compareAngle} ${effectiveB}`} />
+                    <PhotoImage photoId={photoB.photo_id} alt={`${compareAngle} ${effectiveB}`} />
                     <figcaption className="photo-label">{fmtDate(effectiveB)}</figcaption>
                   </figure>
                 </div>
               ) : (
                 <div className="photo-overlay">
-                  <img src={`/api/photos/${photoB.photo_id}`} alt={`${compareAngle} ${effectiveB}`} />
+                  <PhotoImage photoId={photoB.photo_id} alt={`${compareAngle} ${effectiveB}`} />
                   <div className="photo-overlay-top" style={{ clipPath: `inset(0 ${100 - slider}% 0 0)` }}>
-                    <img src={`/api/photos/${photoA.photo_id}`} alt={`${compareAngle} ${effectiveA}`} />
+                    <PhotoImage photoId={photoA.photo_id} alt={`${compareAngle} ${effectiveA}`} />
                   </div>
                   <div className="photo-overlay-handle" style={{ left: `${slider}%` }} />
                   <input
@@ -193,7 +194,7 @@ export default function ProgressPhotosPage() {
                           <div className={`photo-thumb ${photo ? '' : 'photo-thumb-empty'}`} key={angle.id}>
                             {photo ? (
                               <>
-                                <img src={`/api/photos/${photo.photo_id}`} alt={`${angle.label} ${fmtDate(week)}`} />
+                                <PhotoImage photoId={photo.photo_id} alt={`${angle.label} ${fmtDate(week)}`} />
                                 <span className="photo-thumb-label">{angle.label}</span>
                                 <button className="photo-thumb-remove" onClick={() => remove(photo.id)} aria-label={`Remove ${angle.label} photo`}>
                                   <IconTrash size={12} />

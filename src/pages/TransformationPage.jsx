@@ -5,6 +5,7 @@ import { useApp } from '../state.jsx';
 import { Panel, Button, StatusBadge, ProgressBar, Metric, Note, Ring, Segmented, Empty } from '../components/ui.jsx';
 import { LineChart } from '../components/charts.jsx';
 import { WeighInModal } from '../components/forms.jsx';
+import { PhotoImage } from '../components/PhotoImage.jsx';
 import {
   IconArrowRight,
   IconCamera,
@@ -22,7 +23,7 @@ import { fmtNum, fmtKg, fmtPct, fmtDate, fmtMinutes, signed, daysBetween } from 
 const METRIC = 'var(--lime)';
 
 export default function TransformationPage() {
-  const { toast } = useApp();
+  const { toast, dataVersion } = useApp();
   const [data, setData] = useState(null);
   const [range, setRange] = useState('all');
   const [weighOpen, setWeighOpen] = useState(false);
@@ -39,7 +40,7 @@ export default function TransformationPage() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [dataVersion]);
 
   if (error) {
     return (
@@ -331,7 +332,7 @@ export default function TransformationPage() {
             {['front', 'side'].map((angle) => (
               <div className="photo-frame" key={angle}>
                 {latestPhotoWeek && photoByWeek.get(latestPhotoWeek)?.[angle] ? (
-                  <img src={`/api/photos/${photoByWeek.get(latestPhotoWeek)[angle].photo_id}`} alt={`${angle} progress`} />
+                  <PhotoImage photoId={photoByWeek.get(latestPhotoWeek)[angle].photo_id} alt={`${angle} progress`} />
                 ) : (
                   <div className="photo-empty"><IconCamera size={20} /><span>No {angle} photo</span></div>
                 )}

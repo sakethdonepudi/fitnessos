@@ -1,181 +1,125 @@
 # Fitness OS
 
-A private, single-user fitness operating system for an October 19 → December 1
-transformation block. Built to track a real programme honestly: treadmill work
-is separated from daily walking, evidence is labelled by provenance, and the
-coach refuses to recommend crash dieting.
+A private, local-first fitness OS with optional automatic cloud sync:
 
-> Not medical advice. This is a personal tracking tool, not a diagnosis.
+- **Frontend:** React/Vite PWA on GitHub Pages (`/fitnessos/`)
+- **API:** Cloudflare Worker (free tier)
+- **Database:** Cloudflare D1 (authoritative), IndexedDB (offline cache)
+- **Photos:** private Cloudflare R2 bucket, authenticated proxy only
+- **Nightly processing:** Cloudflare Cron Trigger at `25 18 * * *` UTC (11:55 PM Asia/Kolkata)
+- **Apple Health:** native SwiftUI companion with anchored queries, background delivery and a persisted retry queue
 
-## What is implemented
+The existing Express/SQLite implementation is preserved under `legacy/` for
+migration and reference. The production app never starts a Node server.
 
-- **Dedicated treadmill module** — separate from the 10,000-step walking
-  dashboard. Editable `Incline Fat-Loss Walk` preset (5 min warm-up / 20 min
-  incline / 5 min cooldown), interactive block planner, live timeline, guided
-  session timer, weekly cardio schedule, progressive volume, and history.
-- **Apple Health / HealthKit sync** — a minimal iPhone companion
-  (`ios-companion/`) posts step samples and workouts to a token-authenticated
-  endpoint. Indoor-walk workouts link to treadmill sessions; strength workouts
-  link to (or create) gym sessions. Incline and belt speed are explicitly manual.
-- **Three step counters** — A total HealthKit steps, B treadmill-attributed
-  steps, C qualifying non-treadmill steps. Only C advances the 10,000-step goal.
-  Overlapping iPhone/Watch samples are de-duplicated per minute and the observed
-  disagreement is shown as uncertainty.
-- **Treadmill console photos** — upload a photo; macOS Vision OCR extracts
-  speed, incline, time, distance and calories, shows them for confirmation, and
-  flags discrepancies against the session. A photo is never treated as proof of
-  identity or completion.
-- **Nutrition** — meals with macros, recipe library with ingredient-level
-  calculations, water logs, daily/weekly adherence, protein consistency.
-  Unlogged days are “not recorded”, never zero intake.
-- **Training** — Push/Pull/Legs/Recovery/Shoulders/Arms/Rest split, workout
-  logging with sets/reps/weights, estimated-1RM progression, strength-retention
-  score, recovery check-ins and trends.
-- **Transformation dashboard** — current weight, 7-day rolling average, waist,
-  body fat only when measured or explicitly estimated, projected Dec 1 range
-  with confidence, weekly adherence, treadmill minutes, qualifying steps,
-  recovery, weekly progress photos and an animated milestone timeline.
-- **Evidence engine** — every goal carries one of: Verified by device, Logged by
-  user, AI estimated, Pending sync, Needs review, Not recorded. Requirements and
-  fallbacks are shown in the UI.
-- **Smart coaching** — 7-day average weight, waist, strength and recovery drive
-  conservative recommendations. No starvation, no dehydration, no punishing
-  cardio for a missed session, no deadline-driven crash cuts.
-- **Daily closeout at 11:55 PM Asia/Kolkata** — immutable snapshot, then a
-  separate reconciliation layer when late HealthKit data arrives. The original
-  snapshot is never rewritten.
-- **Real persistence** — SQLite, scrypt passwords, HttpOnly sessions, private
-  photo storage behind auth, audit log, versioned goals, repeatable jobs.
+## What works
 
-## Stack
+- Today dashboard, treadmill planner/runner, training split, vegetarian food &
+  recipe library, water, weight/waist, progress photos, evidence, checkpoints,
+  transformation timeline and weekly analytics — all preserved.
+- Local-first records in IndexedDB. Every add/edit/delete survives refresh and
+  works offline.
+- Bidirectional sync with stable IDs, versions, tombstones, per-field conflict
+  resolution, an offline outbox, retries and conflict logging.
+- Encrypted backups (PBKDF2 + AES-GCM), merge/replace restore, CSV exports and
+  legacy JSON import.
+- PWA install, offline app shell, cached static assets, update prompt and
+  online/offline indicators.
+- Server-side 11:55 PM checkpoint with idempotency, late-record reconciliation
+  and cron run history.
+- Three step counters: total, treadmill-attributed and qualifying non-treadmill.
+  Only qualifying steps advance the 10,000-step goal.
 
-- Node 20 + Express + `better-sqlite3`
-- React 18 + Vite (custom CSS, no UI framework)
-- macOS Vision OCR helper (optional; falls back to manual entry)
-- HealthKit via the Swift companion in `ios-companion/`
-
-## Quick start
+## Local development
 
 ```bash
 npm install
-npm run build:ocr     # macOS only; compiles the Vision OCR helper
-npm run seed:demo     # optional: creates a clearly-labelled demo account
-npm run dev           # API :4173 + Vite :5173
+npm run dev                # http://localhost:5173/fitnessos/
 ```
 
-Open <http://localhost:5173>.
+The app works without a backend. Create a local profile, log data, refresh and
+go offline. Cloud sync is optional and configured in Settings.
 
-- Create a real account on the first screen. No progress data is invented.
-- Or choose **Explore with sample data**. Demo credentials:
-  `demo@fitness.local` / `demo12345`. A persistent banner marks all data as
-  synthetic.
-
-Production-style run:
+To run the Worker locally:
 
 ```bash
-npm run build
-npm start             # serves dist + API on :4173
+cp worker/.dev.vars.example worker/.dev.vars   # or create it yourself
+npm run worker:migrate:local
+npm run worker:dev                             # http://localhost:8787
 ```
 
-Reset the demo workspace:
+`worker/.dev.vars` needs:
 
-```bash
-npm run reset:demo
+```
+SETUP_TOKEN=choose-a-one-time-setup-token
+SESSION_SECRET=choose-a-long-random-secret
+ENVIRONMENT=development
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:4173,https://sakethdonepudi.github.io
 ```
 
-## Configuration
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `4173` | API / production server port |
-| `FITNESS_DATA_DIR` | `./data` | SQLite + private photo storage |
-| `DB_PATH` | `$FITNESS_DATA_DIR/fitness.db` | Override database file |
-| `NODE_ENV` | — | `production` enables secure cookies (use HTTPS) |
-
-Back up your data by copying `data/fitness.db` and `data/photos/`.
-
-## Daily checkpoint
-
-The scheduler runs inside the API process. It wakes every 30 seconds and fires
-the closeout once per local day at 23:55 in the user's timezone
-(default `Asia/Kolkata`). A reconciliation pass runs at 02:00 and fills in days
-where Health had not synced.
-
-Manual equivalents (same code path, used by the UI and tests):
-
-```bash
-curl -X POST localhost:4173/api/checkpoints -b cookies.txt \
-  -H 'content-type: application/json' -d '{"date":"2026-10-19"}'
-
-curl -X POST localhost:4173/api/checkpoints/2026-10-19/reconcile -b cookies.txt
-```
-
-Keep the process running (or use launchd/systemd) for automatic closeouts.
-
-## HealthKit sync
-
-1. Open the companion in Xcode (`ios-companion/README.md`).
-2. In Fitness OS → **Settings → Apple Health**, create a device token.
-3. Paste the token + base URL into the companion, grant Health access, sync.
-
-The endpoint is `POST /api/health/sync` with
-`Authorization: Bearer <device-token>`. Payload schema and limitations are in
-`ios-companion/README.md`.
-
-For sync outside your LAN, use Tailscale, a Cloudflare Tunnel with an access
-policy, or a VPN. Do not expose it publicly without TLS and access control.
-
-## Console photo OCR
-
-`npm run build:ocr` compiles `tools/ocr-vision.swift` with macOS Vision. Without
-the binary, uploads still work but extraction returns “unavailable”, and you can
-enter the values manually. OCR output always requires confirmation and is
-cross-checked against the logged session; a photo never upgrades a session to
-“verified by device”.
+Then in the app: **Settings → Cloud & Apple Health → Connect cloud account**,
+enter `http://localhost:8787`, a 12+ character passphrase, and the setup token
+for the very first account. Subsequent devices only need the passphrase.
 
 ## Tests
 
 ```bash
-npm test
+npm test          # 31 unit tests (shared logic + legacy backend)
+npm run test:e2e  # Playwright end-to-end (requires preview + local Worker)
 ```
 
-Covers timezone boundaries, step de-duplication and treadmill attribution,
-weight projection ranges, strength retention, adherence semantics, checkpoint
-immutability + reconciliation, pending-sync behaviour, and coaching guardrails.
+## Deploy
 
-## Project layout
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for the exact GitHub Pages and
+Cloudflare commands, free-tier limits, blockers, and Apple Health signing notes.
+
+Quick summary:
+
+1. Push to `main`; the GitHub Actions workflow tests, builds and deploys the PWA.
+2. Create D1 + R2 and deploy the Worker with Wrangler.
+3. Set the Worker URL in the app (or as the `VITE_API_URL` repository variable).
+4. Create a device token, paste it into the iOS companion.
+
+## Privacy
+
+- No analytics, no third-party AI, no external database.
+- Photos are private in R2 and only served through authenticated Worker requests.
+- Sync passphrases are hashed with PBKDF2-SHA-256 on the Worker; session and
+  device tokens are stored hashed and are revocable.
+- The GitHub repository and Pages artifact contain code only — never health
+  records or photographs.
+- Local-only mode is fully usable; cloud sync is opt-in.
+
+## Known limitations (honest list)
+
+- **Cloudflare is not authenticated in this build environment.** The Worker is
+  implemented and tested locally, but D1/R2/cron are not deployed. You must run
+  `wrangler login` and create the resources. See DEPLOYMENT.md.
+- **Private GitHub repositories may not offer Pages on a free plan.** GitHub
+  Pages for private repos generally requires GitHub Pro/Team/Enterprise. If the
+  Pages deployment is rejected, either make this code-only repository public or
+  enable GitHub Pro. No private health data is in the repo.
+- **Apple Health cannot be tested here.** The Swift companion requires Xcode, an
+  Apple signing identity, a physical iPhone and HealthKit permission. Background
+  delivery timing is controlled by iOS and is never guaranteed to be real-time.
+- **No treadmill incline/speed from HealthKit.** Those stay manual unless a
+  supported treadmill integration supplies them.
+- **No server-side OCR.** The static browser build keeps photos and supports
+  manual console-reading confirmation; the legacy macOS OCR tool is under
+  `legacy/tools/`.
+- **Free-tier limits:** Workers 100k requests/day, D1 5 GB and ~5M row reads /
+  100k writes per day, R2 10 GB. These are far above a single user's usage, but
+  cron and sync should not be polled aggressively. Stay inside the limits.
+
+## Layout
 
 ```
-server/
-  index.js            Express API
-  db.js               SQLite schema + migrations
-  auth.js             scrypt auth, sessions, device tokens
-  seed-demo.js        labelled synthetic demo workspace
-  lib/
-    dates.js          timezone-safe day keys
-    metrics.js        rolling averages, projection, adherence, strength
-    steps.js          de-dup + treadmill attribution
-    coach.js          conservative coaching rules
-    checkpoint.js     immutable snapshots + reconciliation
-    sync.js           HealthKit ingestion / linking
-    jobs.js           scheduler + job history
-    console-ocr.js    Vision OCR + discrepancy parsing
-src/
-  pages/              Today, Transformation, Treadmill, Training,
-                      Nutrition, Photos, Evidence, Settings
-  components/         custom charts, timeline, rings, forms
-  styles/             dark-first design system
-ios-companion/        SwiftUI HealthKit bridge
-tools/                Vision OCR source + build script
-test/                 node:test suites
+src/                 React app (pages, components, styles)
+src/data/            Dexie schema, local API, sync engine, backup, Health import
+shared/              Pure date/steps/analytics/checkpoint/legacy logic
+worker/              Cloudflare Worker, D1 schema, cron
+ios-companion/       SwiftUI HealthKit bridge
+legacy/              Original Express/SQLite backend + migration tooling
+.github/workflows/   GitHub Pages deployment
+public/              PWA icons, favicon
 ```
-
-## Design notes
-
-- Dark-first, custom SVG charts, glass panels, tabular numerals, reduced-motion
-  support, mobile bottom navigation with a full menu.
-- Every metric carries a source label. “Not recorded” is used literally.
-- Projections are ranges with confidence, never promises.
-- Body fat is only shown when measured or explicitly marked estimated. No AI
-  photo body-fat claims.
-- Demo data is watermarked and banner-labelled; it never touches a real account.

@@ -32,11 +32,12 @@ import {
   IconTrendingUp,
 } from '../components/icons.jsx';
 import { fmtNum, fmtMinutes, fmtDate, fmtTime, fmtPct, relativeTime, signed, fmtDateTime, dateKeyInZone } from '../lib/format.js';
+import { PhotoImage } from '../components/PhotoImage.jsx';
 
 const BLOCK_TONES = { warmup: 'warmup', main: 'main', cooldown: 'cooldown' };
 
 export default function TreadmillPage() {
-  const { toast, bootstrap } = useApp();
+  const { toast, bootstrap, dataVersion } = useApp();
   const [tab, setTab] = useState('planner');
   const [presets, setPresets] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -77,7 +78,7 @@ export default function TreadmillPage() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [dataVersion]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -934,7 +935,7 @@ function ConsolePhotoModal({ session, onClose, onSaved }) {
 
         {(result?.photo || session.console_photo_id) && (
           <div className="console-preview">
-            <img src={`/api/photos/${result?.photo?.id || session.console_photo_id}`} alt="Treadmill console" />
+            <PhotoImage photoId={result?.photo?.id || session.console_photo_id} alt="Treadmill console" />
           </div>
         )}
 

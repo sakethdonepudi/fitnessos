@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseConsoleReadings } from '../server/lib/console-ocr.js';
+import { parseConsoleReadings } from '../legacy/server/lib/console-ocr.js';
 
 const lines = [
   { text: 'SPEED 4.2 km/h' },

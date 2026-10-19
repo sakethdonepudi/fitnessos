@@ -91,11 +91,32 @@ export function WeighInModal({ open, onClose, onSaved, initial }) {
 export function MealModal({ open, onClose, onSaved, date }) {
   const { toast } = useApp();
   const [form, setForm] = useState({ slot: 'lunch', name: '', calories: '', protein: '', carbs: '', fat: '', notes: '' });
+  const [foods, setFoods] = useState([]);
+  const [foodId, setFoodId] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open) setForm({ slot: 'lunch', name: '', calories: '', protein: '', carbs: '', fat: '', notes: '' });
+    if (open) {
+      setForm({ slot: 'lunch', name: '', calories: '', protein: '', carbs: '', fat: '', notes: '' });
+      setFoodId('');
+      api.get('/foods').then((res) => setFoods(res.foods || [])).catch(() => {});
+    }
   }, [open]);
+
+  const chooseFood = (id) => {
+    setFoodId(id);
+    const food = foods.find((f) => f.id === id);
+    if (!food) return;
+    setForm((f) => ({
+      ...f,
+      name: food.name,
+      calories: String(food.calories),
+      protein: String(food.protein_g),
+      carbs: String(food.carbs_g),
+      fat: String(food.fat_g),
+      notes: `Food library · ${food.serving}`,
+    }));
+  };
 
   const save = async () => {
     if (!form.name.trim()) return toast('Give the meal a name', 'error');
@@ -124,6 +145,14 @@ export function MealModal({ open, onClose, onSaved, date }) {
   return (
     <Modal open={open} onClose={onClose} title="Log a meal" sub="Values are user-reported estimates unless you attach a label or photo.">
       <div className="form-grid">
+        <Field label="Quick add from food library" style={{ gridColumn: '1 / -1' }} hint="Selecting a food fills the macros; you can still edit them.">
+          <select className="select" value={foodId} onChange={(e) => chooseFood(e.target.value)}>
+            <option value="">Choose a saved food…</option>
+            {foods.map((f) => (
+              <option key={f.id} value={f.id}>{f.name} · {f.serving} · {f.calories} kcal</option>
+            ))}
+          </select>
+        </Field>
         <Field label="Meal">
           <select className="select" value={form.slot} onChange={(e) => setForm({ ...form, slot: e.target.value })}>
             <option value="breakfast">Breakfast</option>

@@ -229,6 +229,31 @@ export const IconArrowRight = make(
     <path d="m14 6 6 6-6 6" />
   </>
 );
+export const IconDownload = make(
+  <>
+    <path d="M12 3v12" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M4 21h16" />
+  </>
+);
+export const IconUpload = make(
+  <>
+    <path d="M12 21V9" />
+    <path d="m7 14 5-5 5 5" />
+    <path d="M4 3h16" />
+  </>
+);
+export const IconSmartphone = make(
+  <>
+    <rect x="7" y="2" width="10" height="20" rx="2.5" />
+    <path d="M11 18h2" />
+  </>
+);
+export const IconCloud = make(
+  <>
+    <path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9.5a4.5 4.5 0 0 1-.5 8.5H7Z" />
+  </>
+);
 export const IconSettings = make(
   <>
     <circle cx="12" cy="12" r="3" />

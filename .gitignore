@@ -1,7 +1,11 @@
 node_modules/
-dist/
-data/
-.context/
-server/bin/
+/dist/
+/data/
+/.context/
+legacy/server/bin/
+worker/.wrangler/
+worker/.dev.vars
+migration/*.json
+migration/*.jsonl
 .DS_Store
 *.log
