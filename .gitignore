@@ -9,3 +9,6 @@ migration/*.json
 migration/*.jsonl
 .DS_Store
 *.log
+ios-companion/**/xcuserdata/
+ios-companion/**/*.xcuserstate
+ios-companion/**/DerivedData/

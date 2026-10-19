@@ -1,52 +1,110 @@
 # Fitness OS — iPhone HealthKit companion
 
-Automatic, incremental Apple Health sync to the Fitness OS Cloudflare Worker.
-This is a native bridge because a browser cannot read HealthKit.
+A complete SwiftUI Xcode project that reads Apple Health and syncs it to the
+deployed Fitness OS Worker.
+
+**Xcode project path**
+
+```
+/Users/sakethdonepudi/conductor/workspaces/fitnessos/brisbane/ios-companion/FitnessOSCompanion.xcodeproj
+```
+
+(relative: `ios-companion/FitnessOSCompanion.xcodeproj`)
 
 ## What it does
 
-- Reads **step count, walking/running distance, heart rate, active energy and
-  workouts** with explicit HealthKit authorization.
-- Uses `HKAnchoredObjectQuery` with **persisted anchors** so each sync sends only
-  new or updated samples.
-- Handles **deleted HealthKit samples** (tombstones sent to the Worker).
-- Registers `HKObserverQuery` + `enableBackgroundDelivery` so iOS can wake the
-  app when health data changes.
-- Keeps a **persisted upload queue** in Application Support. Failed uploads are
-  retried on launch, observer wake-up, foregrounding, or the next manual sync.
-- Sends a revocable **device token** as a Bearer credential.
-- Separates iPhone and Apple Watch sources and preserves HealthKit UUIDs, so
-  re-sends are idempotent and overlapping activity is de-duplicated server-side.
-- Never claims real-time delivery. The UI shows **Connected**, **Sync delayed**,
-  **Permission required**, **Connection required** or **Sync error**.
+- Connection screen with the deployed Worker URL prefilled:
+  `https://fitnessos-api.paralaxicmusic.workers.dev`
+- Device-token configuration; the token is stored in the **iOS Keychain**, never
+  in source code, `UserDefaults`, or the repository.
+- HealthKit authorization for step count, walking/running distance, heart rate,
+  active energy and workouts.
+- `HKAnchoredObjectQuery` with persisted anchors for incremental sync.
+- `HKObserverQuery` + `enableBackgroundDelivery` where iOS supports it.
+- Deleted HealthKit samples are sent as tombstones.
+- Persistent JSON upload queue in Application Support with retries on launch,
+  observer wake-up, foregrounding and manual sync.
+- Manual **Sync now** and **Test connection** actions.
+- Diagnostics: status, last sync, queued uploads, last HealthKit wake, Keychain
+  token presence, Worker URL and errors.
+- HealthKit anchors can be reset for a full resync.
+- Treadmill incline/belt speed are not available from HealthKit; those remain
+  manual in the web app.
 
-## Build
+## Open and sign
 
-1. In Xcode: **File → New → Project → iOS App**, SwiftUI, iOS 17+, physical
-   iPhone target.
-2. Replace the generated `ContentView.swift` with `HealthBridge.swift`.
-3. Target → **Signing & Capabilities** → add **HealthKit**.
-4. Add the HealthKit entitlement (`com.apple.developer.healthkit = YES`). The
-   capability UI normally does this for you.
-5. Add this `Info.plist` key:
+1. Open the `.xcodeproj` path above in Xcode.
+2. Select the **FitnessOSCompanion** target → **Signing & Capabilities**.
+3. Choose your **Team** under Signing (Automatic signing is enabled; no team is
+   committed).
+4. If `com.sakethdonepudi.fitnessos.bridge` is already registered to another
+   team, change **Bundle Identifier** to something unique for your account.
+5. Confirm the **HealthKit** capability is present and **Background Delivery** is
+   enabled. The project already contains:
+   - `com.apple.developer.healthkit`
+   - `com.apple.developer.healthkit.background-delivery`
+6. Connect a physical iPhone, select it as the run destination, and Run.
+7. On the iPhone, trust the developer certificate if prompted:
+   **Settings → General → VPN & Device Management → Developer App**.
 
-```xml
-<key>NSHealthShareUsageDescription</key>
-<string>Fitness OS reads your steps, heart rate, energy and workouts so you can see your training record.</string>
+The entitlement keys are in
+`FitnessOSCompanion/FitnessOSCompanion.entitlements`; the capability is also set
+in the project's target attributes. `Info.plist` contains
+`NSHealthShareUsageDescription`.
+
+## Connect to Fitness OS
+
+1. On the web app: **Settings → Cloud & Apple Health → Create device token**.
+   Copy it once.
+2. In the companion:
+   - Worker URL is prefilled (change it if your Worker URL differs).
+   - Paste the device token.
+   - **Save connection** → **Test connection**.
+   - **Grant Health access**.
+   - **Sync now**.
+3. Background observers start after permission is granted.
+
+Expected states: **Connected**, **Sync delayed**, **Permission required**,
+**Connection required**, **Sync error**. A delayed state is normal; iOS decides
+when to wake the app.
+
+## XcodeGen
+
+The project is generated from `project.yml` and checked in. To regenerate:
+
+```bash
+cd ios-companion
+./scripts/regenerate-project.sh
 ```
 
-6. Run on a **physical iPhone**. HealthKit background delivery and workout data
-   are limited or unavailable in the simulator.
+The script also re-applies the HealthKit capability and `Apple Development`
+signing identity that XcodeGen does not serialize as a nested capability.
 
-## Connect
+## Verification status
 
-1. In Fitness OS: **Settings → Cloud & Apple Health → Create device token**.
-   Copy the token once.
-2. In the companion: enter your Worker base URL (for example
-   `https://fitnessos-api.your-subdomain.workers.dev`) and paste the token.
-3. Tap **Save connection** → **Grant Health access**.
-4. Tap **Sync now** once to establish anchors and send the initial backfill.
-5. Background observers start automatically after permission is granted.
+- Swift syntax check passed with `swiftc -parse`.
+- The Xcode project file passes `plutil -lint`, contains the Swift source,
+  asset catalog, Info.plist, entitlements, HealthKit capability and shared
+  scheme.
+- **Not compiled with `xcodebuild`**: this Mac has only Command Line Tools and no
+  installed Xcode/iOS SDK.
+- **Not tested on a physical iPhone**: HealthKit authorization, automatic
+  background delivery and real workouts cannot be verified from this environment.
+  Do not consider background delivery confirmed until tested on your device.
+
+## Apple signing / membership limitations
+
+- HealthKit requires the HealthKit capability in the provisioning profile.
+  Automatic signing should create it after you select your team.
+- A **paid Apple Developer Program membership** may be required for reliable
+  background-delivery provisioning and long-lived builds. Free personal-team
+  provisioning normally expires after 7 days and may not support every
+  capability. If Xcode reports that HealthKit or Background Delivery is
+  unavailable for your team, use a paid team or enroll.
+- A physical iPhone is required. The simulator cannot validate HealthKit
+  background delivery or real Apple Watch data.
+- iOS does not guarantee immediate background uploads. The persisted queue keeps
+  data and retries later.
 
 ## Worker payload
 
@@ -55,13 +113,13 @@ This is a native bridge because a browser cannot read HealthKit.
 ```json
 {
   "version": 1,
-  "source": "Saketh’s iPhone",
-  "syncedAt": "2026-10-19T18:00:00Z",
+  "source": "iPhone",
+  "syncedAt": "2026-10-20T02:30:00Z",
   "samples": [
     {
       "id": "healthkit-uuid",
-      "start": "2026-10-19T12:00:00Z",
-      "end": "2026-10-19T12:15:00Z",
+      "start": "2026-10-20T02:00:00Z",
+      "end": "2026-10-20T02:15:00Z",
       "steps": 214,
       "source": "Apple Watch",
       "device": "Apple Watch Series 9"
@@ -71,8 +129,8 @@ This is a native bridge because a browser cannot read HealthKit.
     {
       "id": "healthkit-uuid",
       "type": "indoor_walk",
-      "start": "2026-10-19T12:00:00Z",
-      "end": "2026-10-19T12:30:00Z",
+      "start": "2026-10-20T02:00:00Z",
+      "end": "2026-10-20T02:30:00Z",
       "durationSec": 1800,
       "distanceKm": 2.1,
       "avgHr": 130,
@@ -85,7 +143,7 @@ This is a native bridge because a browser cannot read HealthKit.
   "heartRateSamples": [
     {
       "id": "healthkit-uuid",
-      "start": "2026-10-19T12:05:00Z",
+      "start": "2026-10-20T02:05:00Z",
       "bpm": 128,
       "source": "Apple Watch",
       "device": "Apple Watch Series 9"
@@ -97,28 +155,20 @@ This is a native bridge because a browser cannot read HealthKit.
 }
 ```
 
-The Worker upserts by HealthKit UUID, stores source/device/import time, and
-returns accepted counts. The browser sync engine pulls the records into
-IndexedDB and recalculates the three daily step counters.
+The Worker upserts by HealthKit UUID. The web sync engine pulls the records into
+IndexedDB and recalculates the three daily step counters. Photo bytes are not
+uploaded because the deployed Worker uses `PHOTO_STORAGE="local-only"`.
 
-## What HealthKit cannot provide
+## Files
 
-- Treadmill belt speed
-- Treadmill incline
-- Whether a particular person was on the machine
-
-Those stay manual (or come from a supported treadmill integration) and are
-labelled accordingly in the web app.
-
-## Signing and background-delivery caveats
-
-- Running on a physical device requires Apple code signing and provisioning.
-  Free personal teams expire after 7 days and may not support every capability;
-  a paid Apple Developer Program membership may be required for reliable
-  background delivery and long-lived provisioning.
-- iOS schedules background wake-ups at its discretion. A delayed sync is normal.
-  The persisted queue means nothing is lost while the device is offline.
-- Background delivery must be tested on a real device with the HealthKit
-  capability enabled. It cannot be verified from this repository or a simulator.
-- Keep the device token in the Keychain (this code does) and revoke it in
-  Fitness OS if the phone is lost.
+```
+FitnessOSCompanion.xcodeproj/   checked-in Xcode project + shared scheme
+FitnessOSCompanion/
+  HealthBridge.swift            app entry, HealthKit manager, queue, connection UI
+  Info.plist                    privacy strings and launch config
+  FitnessOSCompanion.entitlements
+  Assets.xcassets/AppIcon...    1024 px app icon
+project.yml                     XcodeGen spec
+scripts/regenerate-project.sh   regenerate + reapply capability
+scripts/patch-pbxproj.py        capability/signing patch
+```

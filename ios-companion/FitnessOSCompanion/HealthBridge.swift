@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 import HealthKit
 import UIKit
 import Security
@@ -170,6 +171,7 @@ final class HealthSyncManager: ObservableObject {
     private let defaults = UserDefaults.standard
     private var observers: [HKObserverQuery] = []
     private var syncing = false
+    private var rerunRequested = false
 
     @Published var status: String = "Not connected"
     @Published var lastSync: Date?
@@ -178,7 +180,12 @@ final class HealthSyncManager: ObservableObject {
     @Published var lastObserverEvent: Date?
     @Published var errorText: String?
 
-    private var apiBase: String { UserDefaults.standard.string(forKey: "fos.apiUrl") ?? "" }
+    var tokenStored: Bool { !token.isEmpty }
+
+    private var apiBase: String {
+        let stored = UserDefaults.standard.string(forKey: "fos.apiUrl") ?? ""
+        return stored.isEmpty ? "https://fitnessos-api.paralaxicmusic.workers.dev" : stored
+    }
     private var token: String { Keychain.get("deviceToken") ?? "" }
 
     private var readTypes: Set<HKObjectType> {
@@ -268,14 +275,44 @@ final class HealthSyncManager: ObservableObject {
         }
     }
 
+    func testConnection() async -> String {
+        guard let url = URL(string: apiBase + "/api/healthz") else { return "Invalid Worker URL" }
+        do {
+            let (_, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse else { return "Invalid response" }
+            return http.statusCode == 200 ? "Worker reachable (HTTP 200)" : "Worker returned HTTP \(http.statusCode)"
+        } catch {
+            return "Connection failed: \(error.localizedDescription)"
+        }
+    }
+
+    func resetAnchors() {
+        for key in ["anchor.steps", "anchor.distance", "anchor.heartRate", "anchor.activeEnergy", "anchor.workouts"] {
+            defaults.removeObject(forKey: key)
+        }
+        lastSync = nil
+        defaults.removeObject(forKey: "fos.lastSync")
+        status = "Anchors reset — run Sync now"
+        errorText = nil
+    }
+
     func sync(reason: String = "manual") async {
-        guard !syncing else { return }
+        if syncing {
+            rerunRequested = true
+            return
+        }
         guard !apiBase.isEmpty, !token.isEmpty else {
             status = "Connection required"
             return
         }
         syncing = true
-        defer { syncing = false }
+        defer {
+            syncing = false
+            if rerunRequested {
+                rerunRequested = false
+                Task { await self.sync(reason: "queued") }
+            }
+        }
         status = "Syncing…"
         errorText = nil
 
@@ -451,7 +488,7 @@ final class HealthSyncManager: ObservableObject {
                 start: iso(workout.startDate),
                 end: iso(workout.endDate),
                 durationSec: workout.duration,
-                distanceKm: workout.totalDistance?.doubleValue(for: .meterUnit(with: .kilo)),
+                distanceKm: workout.totalDistance?.doubleValue(for: .kilometer()),
                 avgHr: nil,
                 maxHr: nil,
                 activeCalories: workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()),
@@ -471,7 +508,7 @@ final class HealthSyncManager: ObservableObject {
     }
 
     private func workoutType(_ workout: HKWorkout) -> String {
-        let indoor = (workout.metadata?[HKMetadataKeyIndoorWorkout] as? Bool) ?? false
+        let indoor = (workout.metadata?[HKMetadataKeyIndoorWorkout] as? NSNumber)?.boolValue ?? false
         switch workout.workoutActivityType {
         case .walking: return indoor ? "indoor_walk" : "walking"
         case .running: return indoor ? "indoor_run" : "running"
@@ -519,11 +556,12 @@ enum SyncError: LocalizedError {
 
 // MARK: - UI
 
+@MainActor
 struct ContentView: View {
     @StateObject private var manager = HealthSyncManager()
-    @AppStorage("fos.apiUrl") private var apiUrl = ""
+    @AppStorage("fos.apiUrl") private var apiUrl = "https://fitnessos-api.paralaxicmusic.workers.dev"
     @State private var token = ""
-    @State private var showToken = false
+    @State private var connectionTest = ""
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -534,19 +572,24 @@ struct ContentView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
-                    if showToken {
-                        TextField("Device token", text: $token)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    } else {
-                        SecureField("Device token", text: $token)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                    SecureField("Device token (fos_…)", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    HStack {
+                        Button("Save connection") {
+                            manager.configure(apiUrl: apiUrl, deviceToken: token)
+                        }
+                        .disabled(apiUrl.isEmpty || token.isEmpty)
+                        Button("Test connection") {
+                            Task {
+                                connectionTest = await manager.testConnection()
+                            }
+                        }
+                        .disabled(apiUrl.isEmpty)
                     }
-                    Button("Save connection") {
-                        manager.configure(apiUrl: apiUrl, deviceToken: token)
+                    if !connectionTest.isEmpty {
+                        Text(connectionTest).font(.caption).foregroundStyle(.secondary)
                     }
-                    .disabled(apiUrl.isEmpty || token.isEmpty)
                 }
 
                 Section("Apple Health") {
@@ -560,6 +603,9 @@ struct ContentView: View {
                     Button("Enable background observers") {
                         manager.startObservers()
                     }
+                    Button("Reset HealthKit anchors (full resync)") {
+                        manager.resetAnchors()
+                    }
                 }
 
                 Section("Status") {
@@ -567,6 +613,8 @@ struct ContentView: View {
                     LabeledContent("Last sync", value: manager.lastSync?.formatted(date: .abbreviated, time: .shortened) ?? "Never")
                     LabeledContent("Queued uploads", value: "\(manager.pending)")
                     LabeledContent("Last HealthKit wake", value: manager.lastObserverEvent?.formatted(date: .omitted, time: .shortened) ?? "—")
+                    LabeledContent("Device token", value: manager.tokenStored ? "Stored in Keychain" : "Missing")
+                    LabeledContent("Worker URL", value: apiUrl.isEmpty ? "Missing" : apiUrl)
                     if let error = manager.errorText {
                         Text(error).font(.caption).foregroundStyle(.red)
                     }

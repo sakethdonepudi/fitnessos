@@ -87,19 +87,37 @@ adapter for future use.
 - PBKDF2 is capped at 100,000 iterations on Workers (platform limit); the web
   backup uses stronger browser PBKDF2.
 
-## Remaining Apple Watch work
+## Apple Watch companion
 
-1. Build `ios-companion/HealthBridge.swift` in Xcode with the HealthKit
-   capability, `NSHealthShareUsageDescription`, and an Apple signing identity.
-2. Run it on a physical iPhone (simulator cannot validate HealthKit delivery).
-3. In Fitness OS: **Settings → Cloud & Apple Health → Create device token**.
-4. Paste the Worker URL + token into the companion, grant Health access, and
-   run one manual sync.
-5. Test background observer wake-ups on-device. iOS controls timing; “sync
-   delayed” is normal. A paid Apple Developer membership or device
-   reprovisioning may be required.
-6. Verify treadmill incline/speed remain manual unless a treadmill integration
-   supplies them.
+A complete Xcode project is now available at:
+
+```
+/Users/sakethdonepudi/conductor/workspaces/fitnessos/brisbane/ios-companion/FitnessOSCompanion.xcodeproj
+```
+
+- App entry point, connection screen, HealthKit permission, device-token
+  configuration (Keychain), manual Sync Now, background observers, persistent
+  retry queue and diagnostics.
+- HealthKit and Background Delivery entitlements, privacy usage string, app
+  icon, shared scheme and automatic signing are configured.
+- The deployed Worker URL is prefilled; no tokens or secrets are embedded.
+- `swiftc -parse` passes; the `.xcodeproj` passes `plutil -lint`.
+- **Not compiled with `xcodebuild`:** this Mac has only Command Line Tools and
+  no installed Xcode/iOS SDK.
+- **Not tested on a physical iPhone:** HealthKit authorization, background
+  delivery and real workouts remain unverified until you run it on your device.
+
+Remaining user steps:
+
+1. Open the project in Xcode, select your Apple team, confirm the HealthKit and
+   Background Delivery capabilities, and run on a physical iPhone.
+2. Create a device token in Fitness OS → Settings → Cloud & Apple Health.
+3. Paste the Worker URL + token, grant Health access, run Sync now.
+4. Test background observer wake-ups on-device. iOS controls timing.
+   A paid Apple Developer membership or device reprovisioning may be required;
+   free personal-team provisioning normally expires after 7 days.
+5. Treadmill incline/speed remain manual unless a treadmill integration supplies
+   them.
 
 ## Known limitations
 
