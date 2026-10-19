@@ -1,6 +1,6 @@
 # Deployment status
 
-Last verified: 2026-10-19
+Last verified: 2026-10-19 19:10 UTC
 
 ## GitHub Pages — deployed ✅
 
@@ -16,12 +16,53 @@ Last verified: 2026-10-19
   real fitness records are gitignored and were never committed.
 - Pages source is **GitHub Actions**.
 
-## Cloudflare Worker / D1 / R2 / Cron — implemented, not deployed ⛔
+## Cloudflare deployment — D1 created, R2 blocked, Worker not deployed ⛔
 
-`npx wrangler whoami` reports **not authenticated** in this environment and no
-`CLOUDFLARE_API_TOKEN` is available. Creating D1/R2 resources or deploying the
-Worker would require account authorization, so no Worker URL, D1 database, R2
-bucket or remote Cron Trigger is claimed as live.
+Cloudflare authentication is now confirmed (`paralaxicmusic@gmail.com`).
+
+Completed:
+
+- **D1 created:** `fitnessos` (`6eae433d-624a-45c4-af76-f46039ada26a`, APAC).
+  - Remote migration `0001_init.sql` applied.
+  - Verified 0 users, 0 sync records, 0 photos.
+  - Database ID written into `worker/wrangler.toml`.
+- **Worker secrets configured:** `SESSION_SECRET` and `SETUP_TOKEN` uploaded
+  without printing them.
+  - Setup token is stored on this Mac at `~/.fitnessos/setup-token` with
+    `0600` permissions. Read it with `cat ~/.fitnessos/setup-token`, use it for
+    the first registration, then delete it.
+- **Dry-run bundle:** `wrangler deploy --dry-run` succeeds with the D1 binding
+  and cron config.
+
+Blocked:
+
+- **R2 is not enabled on the account.** `wrangler r2 bucket create
+  fitnessos-photos --storage-class Standard --location apac` fails with
+  `code 10042: Please enable R2 through the Cloudflare Dashboard`.
+- Cloudflare may require a billing profile/subscription checkout to enable R2,
+  even for the free tier. **No billing was enabled and no payment details were
+  entered.** The private photo bucket, Worker deployment, Pages→Worker
+  connection, cloud account creation and production cron are therefore **not
+  live**.
+- The current Wrangler OAuth token also did not list an R2 scope. After R2 is
+  enabled, re-run `npx wrangler login` if bucket commands still return a
+  permission error.
+
+Enable R2 here (no billing is changed by us):
+
+<https://dash.cloudflare.com/847199152bdf1dd0b38a0adc76deb1d5/r2/overview>
+
+Then continue with:
+
+```bash
+npx wrangler r2 bucket create fitnessos-photos --storage-class Standard --location apac
+npx wrangler deploy --config worker/wrangler.toml
+```
+
+After the Worker URL exists, set it as the GitHub Actions repository variable
+`VITE_API_URL` (or enter it in Settings on each device) and re-run the Pages
+workflow. Create the first cloud account with the setup token from
+`~/.fitnessos/setup-token`.
 
 What *was* verified locally with `wrangler dev --local` (simulated D1 + R2):
 

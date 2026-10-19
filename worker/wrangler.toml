@@ -7,7 +7,7 @@ workers_dev = true
 [[d1_databases]]
 binding = "DB"
 database_name = "fitnessos"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "6eae433d-624a-45c4-af76-f46039ada26a"
 migrations_dir = "migrations"
 
 # Create with `wrangler r2 bucket create fitnessos-photos`.
