@@ -1,0 +1,28 @@
+name = "fitnessos-api"
+main = "src/index.js"
+compatibility_date = "2025-07-18"
+workers_dev = true
+
+# Replace database_id after `wrangler d1 create fitnessos` (see DEPLOYMENT.md).
+[[d1_databases]]
+binding = "DB"
+database_name = "fitnessos"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# Create with `wrangler r2 bucket create fitnessos-photos`.
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "fitnessos-photos"
+
+[triggers]
+crons = ["25 18 * * *"]
+
+[vars]
+ALLOWED_ORIGINS = "https://sakethdonepudi.github.io,http://localhost:5173,http://localhost:4173"
+ENVIRONMENT = "production"
+
+# Secrets (set with `wrangler secret put ...`):
+#   SESSION_SECRET   - random 32+ byte secret used for token hashing pepper
+#   SETUP_TOKEN      - one-time bootstrap token required to create the owner account
+#   APP_ORIGIN       - optional canonical frontend origin
