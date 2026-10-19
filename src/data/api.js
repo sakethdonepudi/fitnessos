@@ -1256,7 +1256,10 @@ async function handle(pathname, method, body) {
   if (pathname === '/checkpoints' && method === 'POST') {
     return createCheckpoint(body?.date || today, { force: !!body?.force, source: body?.source || 'client', reconstructed: false });
   }
-  if (pathname === '/checkpoints/preview') return (await gatherDay(today)) && buildSnapshot({ ...(await previewArgs(today)) });
+  if (pathname === '/checkpoints/preview') {
+    const previewDate = new URLSearchParams(body?.__query || '').get('date') || today;
+    return buildSnapshot({ ...(await previewArgs(previewDate)) });
+  }
   if (pathname.startsWith('/checkpoints/') && pathname.endsWith('/reconcile') && method === 'POST') {
     return reconcileCheckpoint(pathname.split('/')[2]);
   }
@@ -1278,7 +1281,9 @@ async function handle(pathname, method, body) {
     return { photos: rows.map((r) => ({ ...r, mime: byId.get(r.photo_id)?.mime || null, size: byId.get(r.photo_id)?.size || null })).sort((a, b) => b.week_start.localeCompare(a.week_start)) };
   }
   if (pathname === '/progress-photos' && method === 'POST') {
-    const { file, angle, weekStart } = body;
+    const { file } = body;
+    const angle = body.angle || 'front';
+    const weekStart = body.weekStart || weekStartKey(today);
     if (!file) {
       const err = new Error('No photo uploaded');
       err.status = 400;
@@ -1292,8 +1297,8 @@ async function handle(pathname, method, body) {
     const photo = await savePhoto(file, 'progress');
     const row = await putRecord(
       'progress_photos',
-      { week_start: weekStart || weekStartKey(today), angle: angle || 'front', photo_id: photo.id, created_at: nowIso() },
-      { id: `progress:${weekStart || weekStartKey(today)}:${angle || 'front'}` }
+      { week_start: weekStart, angle, photo_id: photo.id, created_at: nowIso() },
+      { id: `progress:${weekStart}:${angle}` }
     );
     await audit('progress_photo.create', 'progress_photos', row);
     requestSync();

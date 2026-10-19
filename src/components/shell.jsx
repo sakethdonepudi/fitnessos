@@ -143,7 +143,7 @@ export function SyncIndicator({ sync }) {
     <span className="sync-pill" title={sync?.error || `${sync?.pending || 0} change(s) queued`}>
       <span className="sync-dot" style={{ background: tone, boxShadow: status === 'error' ? '0 0 8px rgba(255,107,107,.6)' : status === 'synced' ? '0 0 8px rgba(198,255,74,.5)' : 'none' }} />
       <span className="sync-label">{label}</span>
-      {sync?.pending > 0 && <span className="sync-count">{sync.pending}</span>}
+      {sync?.pending > 0 && sync?.configured && <span className="sync-count">{sync.pending}</span>}
       {status === 'syncing' && <span className="spinner" style={{ width: 9, height: 9, borderWidth: 1.5 }} />}
     </span>
   );
