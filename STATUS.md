@@ -1,6 +1,6 @@
 # Deployment status
 
-Last verified: 2026-10-19 20:45 UTC (2026-10-20 02:15 IST)
+Last verified: 2026-10-19 20:52 UTC (2026-10-20 02:22 IST)
 
 ## Live services
 
@@ -17,7 +17,8 @@ Last verified: 2026-10-19 20:45 UTC (2026-10-20 02:15 IST)
 
 - Repository: https://github.com/sakethdonepudi/fitnessos (public, code only)
 - Worker deployment version: `ffb091e1-06b9-4260-b95f-2c21c0a4ded1`
-- Pages workflow: https://github.com/sakethdonepudi/fitnessos/actions/runs/39317211367
+- Deployed source commit: `ea56868`
+- Pages workflow: https://github.com/sakethdonepudi/fitnessos/actions/runs/39322084211
 
 ## Production account
 
@@ -63,11 +64,13 @@ adapter for future use.
   - no browser page errors ✅
 - Controlled scheduled-handler test:
   - temporarily registered a `*/2 * * * *` trigger,
-  - Cloudflare invoked `scheduled` at `2026-10-19T20:42:36Z`,
-  - run completed `ok`, processed 1 user, created the `2026-10-20` checkpoint
-    and correctly skipped the two prior days with no data,
-  - the test checkpoint/summary were removed and the daily `25 18 * * *`
-    schedule was restored (verified via the Cloudflare API).
+  - Cloudflare invoked `scheduled` three times while the temporary trigger was
+    being removed (`20:42:36`, `20:44:36`, `20:46:36` UTC),
+  - each run completed `ok`, processed 1 user, created/reconciled the
+    `2026-10-20` checkpoint and correctly skipped the two prior days with no
+    data (the first run created it; later runs were idempotent),
+  - the test checkpoint, summary and test cron-run rows were removed, and the
+    daily `25 18 * * *` schedule was restored (verified via the Cloudflare API).
 - The **real 23:55 IST checkpoint has not run yet**. The next scheduled run is
   2026-10-20 18:25 UTC (23:55 IST). Do not treat the controlled test as the
   daily production checkpoint.
