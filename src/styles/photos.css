@@ -1,0 +1,255 @@
+/* Progress photos */
+
+.photo-layout {
+  display: grid;
+  grid-template-columns: 1.45fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.photo-compare-lg {
+  gap: 16px;
+}
+
+.photo-compare-lg .photo-frame {
+  aspect-ratio: 3 / 4;
+}
+
+.photo-overlay {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  max-height: 520px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #0a0c10;
+}
+
+.photo-overlay img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.photo-overlay-top {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.photo-overlay-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--lime);
+  box-shadow: 0 0 14px rgba(198, 255, 74, 0.5);
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+.photo-overlay-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: ew-resize;
+  margin: 0;
+}
+
+.photo-overlay-tag {
+  position: absolute;
+  bottom: 10px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.66);
+  backdrop-filter: blur(8px);
+  font-size: 10.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.photo-weeks {
+  display: flex;
+  flex-direction: column;
+}
+
+.photo-week {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.photo-week:last-child {
+  border-bottom: none;
+}
+
+.photo-week-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.photo-week-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+}
+
+.photo-thumb {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 11px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line);
+}
+
+.photo-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.photo-thumb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-style: dashed;
+  color: var(--text-dim);
+}
+
+.photo-thumb-label {
+  position: absolute;
+  left: 7px;
+  bottom: 7px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.photo-thumb-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.16s, color 0.16s;
+}
+
+.photo-thumb:hover .photo-thumb-remove {
+  opacity: 1;
+}
+
+.photo-thumb-remove:hover {
+  color: var(--red);
+}
+
+.camera-guide {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.camera-guide-svg {
+  width: 130px;
+  height: 180px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+}
+
+.camera-guide-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.camera-step {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.camera-step span {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: rgba(198, 255, 74, 0.12);
+  border: 1px solid var(--lime-line);
+  color: var(--lime);
+  font-size: 9.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.photo-storage-note {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: rgba(94, 234, 212, 0.05);
+  border: 1px solid rgba(94, 234, 212, 0.16);
+  font-size: 11px;
+  color: var(--teal);
+}
+
+.delta-up {
+  color: var(--lime);
+}
+
+.delta-down {
+  color: var(--amber);
+}
+
+.delta-flat {
+  color: var(--text-dim);
+}
+
+@media (max-width: 1050px) {
+  .photo-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .photo-week-grid {
+    gap: 5px;
+  }
+  .camera-guide {
+    flex-direction: column;
+  }
+  .camera-guide-svg {
+    width: 100%;
+    height: 160px;
+  }
+  .photo-compare-lg {
+    gap: 8px;
+  }
+}

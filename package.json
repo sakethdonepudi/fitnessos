@@ -1,0 +1,36 @@
+{
+  "name": "fitness-os",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Private Fitness OS — transformation, treadmill, nutrition and recovery tracking",
+  "scripts": {
+    "dev": "concurrently -n api,web -c green,cyan \"node --watch server/index.js\" \"vite\"",
+    "dev:api": "node server/index.js",
+    "dev:web": "vite",
+    "build": "vite build",
+    "build:ocr": "bash tools/build-ocr.sh",
+    "start": "NODE_ENV=production node server/index.js",
+    "seed:demo": "node server/seed-demo.js",
+    "reset:demo": "node server/seed-demo.js --reset",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.21.0",
+    "multer": "^2.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.0.1",
+    "playwright": "^1.47.0",
+    "typescript": "^5.6.2",
+    "vite": "^6.4.4"
+  }
+}
