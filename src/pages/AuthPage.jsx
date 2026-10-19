@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../state.jsx';
+import { getApiBase } from '../data/remote.js';
 import { Button, Field, Note } from '../components/ui.jsx';
 import { IconShield, IconTreadmill, IconChart, IconCloud, IconLock, IconInfo } from '../components/icons.jsx';
 
@@ -22,7 +23,7 @@ export default function AuthPage() {
     waterMl: 3250,
     stepGoal: 10000,
     targetWeightKg: 84,
-    apiUrl: '',
+    apiUrl: getApiBase(),
     passphrase: '',
     setupToken: '',
   });

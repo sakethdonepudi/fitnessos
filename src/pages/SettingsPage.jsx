@@ -50,7 +50,7 @@ export default function SettingsPage() {
   const [auditRows, setAuditRows] = useState([]);
   const [busy, setBusy] = useState(false);
   const [cloudModal, setCloudModal] = useState(false);
-  const [cloudForm, setCloudForm] = useState({ apiUrl: sync?.configured ? localStorage.getItem('fos.apiUrl') || '' : '', passphrase: '', setupToken: '' });
+  const [cloudForm, setCloudForm] = useState({ apiUrl: localStorage.getItem('fos.apiUrl') || import.meta.env.VITE_API_URL || '', passphrase: '', setupToken: '' });
   const [backupModal, setBackupModal] = useState(false);
   const [backupForm, setBackupForm] = useState({ passphrase: '', confirm: '', encrypt: true });
   const [restoreModal, setRestoreModal] = useState(false);
@@ -546,7 +546,7 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className="settings-kv" style={{ marginTop: 14 }}><span>API URL</span><b className="truncate">{localStorage.getItem('fos.apiUrl') || 'Not set'}</b></div>
+            <div className="settings-kv" style={{ marginTop: 14 }}><span>API URL</span><b className="truncate">{localStorage.getItem('fos.apiUrl') || import.meta.env.VITE_API_URL || 'Not set'}</b></div>
             <div className="settings-kv"><span>Photo storage</span><b>{sync?.photoStorage === 'r2' ? 'Private R2' : 'This browser only (local-only)'}</b></div>
             <div className="settings-kv"><span>Last sync</span><b>{sync?.lastSync ? fmtDateTime(sync.lastSync) : 'Never'}</b></div>
             <div className="settings-kv"><span>Device ID</span><b className="mono tiny">{localStorage.getItem('fos.deviceId')?.slice(0, 18)}…</b></div>
