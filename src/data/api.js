@@ -394,6 +394,11 @@ async function bootstrap() {
     lastHealthImport(),
     healthImports(),
   ]);
+  if (!p) {
+    const err = new Error('No profile yet');
+    err.status = 401;
+    throw err;
+  }
   const nutrition = nutritionTotals(meals);
   const decorated = await decorateSessions(tread);
   const recoveryRows = await recoveryRowsFor(addDaysKey(today, -27), today);

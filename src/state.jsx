@@ -29,6 +29,13 @@ export function AppProvider({ children }) {
     if (!silent) setLoadingBootstrap(true);
     try {
       const data = await api.get('/bootstrap');
+      if (!data.profile) {
+        setBootstrap(null);
+        setProfile(null);
+        setGoal(null);
+        setUser(null);
+        return null;
+      }
       setBootstrap(data);
       setProfile(data.profile);
       setGoal(data.goal);
