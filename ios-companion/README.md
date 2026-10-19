@@ -86,6 +86,8 @@ cd ios-companion
 
 The script also re-applies the HealthKit capability and `Apple Development`
 signing identity that XcodeGen does not serialize as a nested capability.
+The checked-in project already has your development team selected; regenerating
+may clear it, so reselect your team afterwards.
 
 ## Troubleshooting uploads
 
