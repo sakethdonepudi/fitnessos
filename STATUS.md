@@ -1,118 +1,109 @@
 # Deployment status
 
-Last verified: 2026-10-19 19:10 UTC
+Last verified: 2026-10-19 20:45 UTC (2026-10-20 02:15 IST)
 
-## GitHub Pages — deployed ✅
+## Live services
 
-- Repository: <https://github.com/sakethdonepudi/fitnessos>
-- Live site: <https://sakethdonepudi.github.io/fitnessos/>
-- Workflow: `.github/workflows/deploy.yml`
-- Verified: HTTP 200, app shell loads, HashRouter deep link
-  (`/#/treadmill`) reloads, PWA manifest served, service worker active, zero
-  localhost requests.
-- The repository was changed from private to **public** because GitHub Pages on
-  a private repository requires a paid GitHub plan. The repo contains code and
-  synthetic demo assets only; `data/`, migration exports, photos, backups and
-  real fitness records are gitignored and were never committed.
-- Pages source is **GitHub Actions**.
+| Service | Status | Detail |
+|---|---|---|
+| GitHub Pages | ✅ Live | https://sakethdonepudi.github.io/fitnessos/ |
+| GitHub Actions | ✅ Passing | test → build → deploy on `main` |
+| Cloudflare Worker | ✅ Live | https://fitnessos-api.paralaxicmusic.workers.dev |
+| Cloudflare D1 | ✅ Live | `fitnessos` (`6eae433d-624a-45c4-af76-f46039ada26a`, APAC) |
+| Daily Cron Trigger | ✅ Registered | `25 18 * * *` UTC = 23:55 IST |
+| Cloudflare R2 | ⛔ Disabled | Billing/enablement avoided by request |
+| Photo storage | Local-only | IndexedDB; metadata syncs to D1 |
+| Apple Health companion | Code ready | Not built/tested on a physical device |
 
-## Cloudflare deployment — D1 created, R2 blocked, Worker not deployed ⛔
+- Repository: https://github.com/sakethdonepudi/fitnessos (public, code only)
+- Worker deployment version: `ffb091e1-06b9-4260-b95f-2c21c0a4ded1`
+- Pages workflow: https://github.com/sakethdonepudi/fitnessos/actions/runs/39317211367
 
-Cloudflare authentication is now confirmed (`paralaxicmusic@gmail.com`).
+## Production account
 
-Completed:
+- Owner account created on the Worker.
+- Cloud sync passphrase is stored locally at `~/.fitnessos/cloud-passphrase` (0600).
+- Worker URL is stored at `~/.fitnessos/cloud-url`.
+- The one-time `SETUP_TOKEN` was deleted from this Mac after registration.
+- D1 contains only the production profile/defaults: profile, goal, 8 foods,
+  3 recipes and the treadmill preset. No demo progress, test meals, test
+  water, test photos or test checkpoints remain.
+- To connect a new browser: open the live app → **Connect account** → enter the
+  passphrase from the file above. The Worker URL is prefilled by the Pages build.
 
-- **D1 created:** `fitnessos` (`6eae433d-624a-45c4-af76-f46039ada26a`, APAC).
-  - Remote migration `0001_init.sql` applied.
-  - Verified 0 users, 0 sync records, 0 photos.
-  - Database ID written into `worker/wrangler.toml`.
-- **Worker secrets configured:** `SESSION_SECRET` and `SETUP_TOKEN` uploaded
-  without printing them.
-  - Setup token is stored on this Mac at `~/.fitnessos/setup-token` with
-    `0600` permissions. Read it with `cat ~/.fitnessos/setup-token`, use it for
-    the first registration, then delete it.
-- **Dry-run bundle:** `wrangler deploy --dry-run` succeeds with the D1 binding
-  and cron config.
+## Photo storage (local-only)
 
-Blocked:
+`PHOTO_STORAGE="local-only"` is set in `worker/wrangler.toml`; the R2 binding is
+removed. The R2 implementation remains in `worker/src/photos.js` behind a storage
+adapter for future use.
 
-- **R2 is not enabled on the account.** `wrangler r2 bucket create
-  fitnessos-photos --storage-class Standard --location apac` fails with
-  `code 10042: Please enable R2 through the Cloudflare Dashboard`.
-- Cloudflare may require a billing profile/subscription checkout to enable R2,
-  even for the free tier. **No billing was enabled and no payment details were
-  entered.** The private photo bucket, Worker deployment, Pages→Worker
-  connection, cloud account creation and production cron are therefore **not
-  live**.
-- The current Wrangler OAuth token also did not list an R2 scope. After R2 is
-  enabled, re-run `npx wrangler login` if bucket commands still return a
-  permission error.
+- Photo bytes stay in the browser's IndexedDB.
+- Only metadata (kind, MIME, size, dimensions, EXIF, storage mode) syncs to D1.
+- The Worker refuses photo byte uploads with `409`.
+- Other devices show “Photo file is on another device”; no broken photo URLs.
+- Backup includes photo bytes; restore on the same browser keeps them viewable.
+- To move photos between devices today, use the encrypted backup/restore flow.
+- Enabling R2 later: add the binding, set `PHOTO_STORAGE="r2"`, redeploy. This
+  requires enabling R2 (and possibly a billing profile) in Cloudflare.
 
-Enable R2 here (no billing is changed by us):
+## Verification results
 
-<https://dash.cloudflare.com/847199152bdf1dd0b38a0adc76deb1d5/r2/overview>
+- `npm test`: **31/31 passing**.
+- Static/PWA end-to-end suite: **16/16 passing** (local preview + local Worker).
+- Production Worker:
+  - account creation and login ✅
+  - D1 migration ✅; production profile/defaults present
+  - meal logging synced to D1 ✅
+  - water logging synced to D1 ✅
+  - second-browser pull of profile, meal and water ✅
+  - deletion propagation ✅
+  - private photo bytes refused in local-only mode ✅
+  - local photo upload/view ✅, second-browser “on another device” notice ✅
+  - encrypted backup and restore with photo ✅
+  - no browser page errors ✅
+- Controlled scheduled-handler test:
+  - temporarily registered a `*/2 * * * *` trigger,
+  - Cloudflare invoked `scheduled` at `2026-10-19T20:42:36Z`,
+  - run completed `ok`, processed 1 user, created the `2026-10-20` checkpoint
+    and correctly skipped the two prior days with no data,
+  - the test checkpoint/summary were removed and the daily `25 18 * * *`
+    schedule was restored (verified via the Cloudflare API).
+- The **real 23:55 IST checkpoint has not run yet**. The next scheduled run is
+  2026-10-20 18:25 UTC (23:55 IST). Do not treat the controlled test as the
+  daily production checkpoint.
 
-Then continue with:
+## Free-tier / billing status
 
-```bash
-npx wrangler r2 bucket create fitnessos-photos --storage-class Standard --location apac
-npx wrangler deploy --config worker/wrangler.toml
-```
+- No Cloudflare paid service, R2 subscription, billing profile or payment
+  method was enabled.
+- R2 is disabled; no R2 bucket exists.
+- Workers Free and D1 Free are in use. Current data is ~14 records, far below
+  free limits (Workers 100k requests/day; D1 5 GB and millions of reads/day).
+- Cron Triggers are registered on the Worker; no paid cron product is involved.
+- GitHub Pages/Actions are free for this public repo.
+- PBKDF2 is capped at 100,000 iterations on Workers (platform limit); the web
+  backup uses stronger browser PBKDF2.
 
-After the Worker URL exists, set it as the GitHub Actions repository variable
-`VITE_API_URL` (or enter it in Settings on each device) and re-run the Pages
-workflow. Create the first cloud account with the setup token from
-`~/.fitnessos/setup-token`.
+## Remaining Apple Watch work
 
-What *was* verified locally with `wrangler dev --local` (simulated D1 + R2):
+1. Build `ios-companion/HealthBridge.swift` in Xcode with the HealthKit
+   capability, `NSHealthShareUsageDescription`, and an Apple signing identity.
+2. Run it on a physical iPhone (simulator cannot validate HealthKit delivery).
+3. In Fitness OS: **Settings → Cloud & Apple Health → Create device token**.
+4. Paste the Worker URL + token into the companion, grant Health access, and
+   run one manual sync.
+5. Test background observer wake-ups on-device. iOS controls timing; “sync
+   delayed” is normal. A paid Apple Developer membership or device
+   reprovisioning may be required.
+6. Verify treadmill incline/speed remain manual unless a treadmill integration
+   supplies them.
 
-- Setup/login/session auth with PBKDF2.
-- Device token creation and revocation.
-- Bidirectional sync, per-field conflict merge, tombstones, idempotent re-sends.
-- Private photo upload/read through R2.
-- Health sync payload ingestion (steps, workouts, HR, deletions).
-- Cron closeout (`/__scheduled?cron=25+18+*+*+*`), server-side step accounting,
-  late-record reconciliation and weekly summary generation.
-- D1 schema migration applies cleanly.
+## Known limitations
 
-Exact next steps are in [DEPLOYMENT.md](./DEPLOYMENT.md). Summary:
-
-```bash
-npx wrangler login
-npx wrangler d1 create fitnessos
-npx wrangler r2 bucket create fitnessos-photos
-# put the printed database_id into worker/wrangler.toml
-npx wrangler d1 migrations apply fitnessos --remote --config worker/wrangler.toml
-npx wrangler secret put SESSION_SECRET --config worker/wrangler.toml
-npx wrangler secret put SETUP_TOKEN --config worker/wrangler.toml
-npx wrangler deploy --config worker/wrangler.toml
-```
-
-Then set the Worker URL in the app (Settings → Cloud & Apple Health) or add a
-`VITE_API_URL` Actions repository variable and re-run the Pages workflow.
-
-## Apple Health — companion implemented, on-device build not verified ⚠️
-
-- `ios-companion/HealthBridge.swift` now uses `HKObserverQuery`,
-  `HKAnchoredObjectQuery`, background delivery, persisted anchors, deleted-sample
-  tombstones, a persisted retry queue and revocable device tokens.
-- Not built or tested here: this workspace has no Xcode/iOS SDK or physical
-  iPhone, and no Apple signing identity. HealthKit background delivery timing
-  cannot be verified from a simulator or CI.
-- A paid Apple Developer membership or device reprovisioning may be required.
-
-## Test results
-
-- `npm test`: **31/31 passing** (shared timezone/step/checkpoint/coach logic +
-  legacy backend).
-- `npm run test:e2e` with local Worker: **16/16 checks passing** — profile,
-  persistence, encrypted backup, PWA offline reload, cloud sync, second-device
-  pull, mobile overflow and no page errors.
-- Live Pages smoke test: pass.
-
-## Free-tier usage
-
-- GitHub Pages: free.
-- GitHub Actions: free for this small public repo.
-- Cloudflare Workers/D1/R2/Cron: designed for the free tier; nothing is
-  deployed, so no usage or billing exists yet. Do not enable paid overages.
+- Cloud photos do not cross devices until R2 is enabled (by design).
+- Apple Health has not been tested on hardware.
+- The app is single-user with a passphrase; there is no email/password recovery.
+- Cloudflare cron timing is not guaranteed to the second; scheduled and actual
+  timestamps are recorded.
+- The GitHub repository is public to allow free GitHub Pages; it contains no
+  health records, photos, backups, tokens or secrets.

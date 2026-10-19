@@ -64,12 +64,20 @@ npx wrangler login
 npx wrangler whoami
 ```
 
-Create the database and bucket:
+Create the database:
 
 ```bash
 npx wrangler d1 create fitnessos
 # copy the printed database_id into worker/wrangler.toml
-npx wrangler r2 bucket create fitnessos-photos
+```
+
+R2 is **optional**. The current deployment uses `PHOTO_STORAGE="local-only"`
+and has no R2 binding. Skip R2 entirely if you do not want to enable it:
+
+```bash
+# optional, requires enabling R2 in Cloudflare (may require a billing profile)
+npx wrangler r2 bucket create fitnessos-photos --storage-class Standard
+# then restore the [[r2_buckets]] binding and set PHOTO_STORAGE="r2"
 ```
 
 Apply the schema:
@@ -218,8 +226,8 @@ curl -X POST https://<worker>/api/jobs/run \
 - **D1 Free:** 5 GB storage, 5M row reads/day, 100k row writes/day. A single
   user's sync traffic is tiny. The cron reads one day + two reconciliation days
   per run.
-- **R2 Free:** 10 GB storage, 1M Class A operations/month, 10M Class B/month.
-  Photos are resized client-side before upload.
+- **R2 Free (not enabled):** 10 GB storage if you opt in. The current
+  deployment stores photos locally in IndexedDB and syncs only metadata.
 - **Cron Triggers:** included with Workers Free.
 - Do not enable paid overages. The architecture avoids paid services.
 

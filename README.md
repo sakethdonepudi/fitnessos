@@ -5,7 +5,7 @@ A private, local-first fitness OS with optional automatic cloud sync:
 - **Frontend:** React/Vite PWA on GitHub Pages (`/fitnessos/`)
 - **API:** Cloudflare Worker (free tier)
 - **Database:** Cloudflare D1 (authoritative), IndexedDB (offline cache)
-- **Photos:** private Cloudflare R2 bucket, authenticated proxy only
+- **Photos:** local IndexedDB by default; optional private Cloudflare R2 when enabled
 - **Nightly processing:** Cloudflare Cron Trigger at `25 18 * * *` UTC (11:55 PM Asia/Kolkata)
 - **Apple Health:** native SwiftUI companion with anchored queries, background delivery and a persisted retry queue
 
@@ -83,7 +83,7 @@ Quick summary:
 ## Privacy
 
 - No analytics, no third-party AI, no external database.
-- Photos are private in R2 and only served through authenticated Worker requests.
+- Photos are local-only in the current deployment. If R2 is enabled later, they are private and served only through authenticated Worker requests.
 - Sync passphrases are hashed with PBKDF2-SHA-256 on the Worker; session and
   device tokens are stored hashed and are revocable.
 - The GitHub repository and Pages artifact contain code only — never health
@@ -102,6 +102,9 @@ Quick summary:
 - **Apple Health cannot be tested here.** The Swift companion requires Xcode, an
   Apple signing identity, a physical iPhone and HealthKit permission. Background
   delivery timing is controlled by iOS and is never guaranteed to be real-time.
+- **Cloud photo bytes are disabled.** The current deployment uses local-only
+  photo storage; photos sync across devices only via an encrypted backup file.
+  R2 remains available in the source for future use.
 - **No treadmill incline/speed from HealthKit.** Those stay manual unless a
   supported treadmill integration supplies them.
 - **No server-side OCR.** The static browser build keeps photos and supports

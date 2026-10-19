@@ -221,9 +221,12 @@ async function linkWorkouts(env, userId, date, workouts, treadmillSessions, heal
   return { workouts: nextWorkouts, treadmillSessions: nextTreadmill };
 }
 
-async function upsertCheckpoint(env, userId, date, scheduledFor, { forceReconcile = false } = {}) {
+async function upsertCheckpoint(env, userId, date, scheduledFor, { forceReconcile = false, createIfMissing = true } = {}) {
   const id = `checkpoint:${date}`;
   const existing = await getRecord(env, userId, id);
+  if (!existing && !createIfMissing) {
+    return { created: false, reconciled: false, skipped: true, changes: [] };
+  }
   const { snapshot } = await buildForDate(env, userId, date);
   const at = nowIso();
 
@@ -350,9 +353,13 @@ export async function runCloseout(env, { scheduledTime = Date.now(), manualDates
       const date = manualDates?.[0] || localDateKey(new Date(scheduledTime), TIMEZONE);
       const dates = manualDates || [date, addDaysKey(date, -1), addDaysKey(date, -2)];
       for (const d of dates) {
-        const result = await upsertCheckpoint(env, user.id, d, scheduledFor, { forceReconcile: !!manualDates });
+        const createIfMissing = !!manualDates || d === date;
+        const result = await upsertCheckpoint(env, user.id, d, scheduledFor, {
+          forceReconcile: !!manualDates,
+          createIfMissing,
+        });
         details.push({ date: d, ...result });
-        await buildWeeklySummary(env, user.id, d);
+        if (!result.skipped) await buildWeeklySummary(env, user.id, d);
       }
       processed += 1;
     }
