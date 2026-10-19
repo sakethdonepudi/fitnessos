@@ -236,6 +236,70 @@ export async function serverUpsert(env, userId, collection, id, data, { deleted 
   });
 }
 
+/**
+ * Batch-upserts many records with one sequence allocation and chunked D1
+ * batches. Used by the HealthKit endpoint so a large initial backfill does not
+ * exceed the Workers/D1 per-invocation query limit.
+ */
+export async function serverUpsertMany(env, userId, records, { deviceId = null } = {}) {
+  if (!records.length) return [];
+  const at = nowIso();
+  const seqRow = await env.DB.prepare(
+    `INSERT INTO user_sequences (user_id, next_seq) VALUES (?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET next_seq = next_seq + ?
+     RETURNING next_seq`
+  )
+    .bind(userId, records.length, records.length)
+    .first();
+  const end = seqRow?.next_seq || records.length;
+  const start = end - records.length + 1;
+
+  const statement = env.DB.prepare(
+    `INSERT INTO sync_records
+       (user_id, id, collection, data_json, field_updated_at_json, updated_at, server_updated_at, server_seq, deleted, version, device_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+     ON CONFLICT(user_id, id) DO UPDATE SET
+       collection = excluded.collection,
+       data_json = CASE WHEN excluded.deleted = 1 THEN sync_records.data_json ELSE excluded.data_json END,
+       field_updated_at_json = excluded.field_updated_at_json,
+       updated_at = excluded.updated_at,
+       server_updated_at = excluded.server_updated_at,
+       server_seq = excluded.server_seq,
+       deleted = excluded.deleted,
+       version = sync_records.version + 1,
+       device_id = excluded.device_id`
+  );
+
+  for (let i = 0; i < records.length; i += 100) {
+    const chunk = records.slice(i, i + 100);
+    const statements = chunk.map((record, offset) => {
+      const data = record.deleted ? {} : record.data || {};
+      const fieldUpdatedAt = record.fieldUpdatedAt
+        || Object.fromEntries(Object.keys(data).map((key) => [key, record.updatedAt || at]));
+      return statement.bind(
+        userId,
+        record.id,
+        record.collection,
+        JSON.stringify(data),
+        JSON.stringify(fieldUpdatedAt),
+        record.updatedAt || at,
+        at,
+        start + i + offset,
+        record.deleted ? 1 : 0,
+        deviceId
+      );
+    });
+    await env.DB.batch(statements);
+  }
+
+  return records.map((record, index) => ({
+    ...record,
+    version: 1,
+    serverSeq: start + index,
+    serverUpdatedAt: at,
+  }));
+}
+
 export async function touchRecord(env, userId, id, updater) {
   const existing = await getRecord(env, userId, id);
   if (!existing) return null;

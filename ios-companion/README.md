@@ -25,6 +25,13 @@ deployed Fitness OS Worker.
 - Persistent JSON upload queue in Application Support with retries on launch,
   observer wake-up, foregrounding and manual sync.
 - Manual **Sync now** and **Test connection** actions.
+  - Test Connection now calls the authenticated `GET /api/health/auth` and
+    reports the device name; it no longer accepts a public HTTP 200 as proof.
+  - Sync Now saves the current Worker URL/token to the Keychain before syncing,
+    so a newly pasted token cannot be ignored.
+- Uploads are split into batches of 30 records, deduplicated by HealthKit UUID
+  fingerprint, and retried with exponential backoff. Existing large queue
+  batches are rechunked on launch without being discarded.
 - Diagnostics: status, last sync, queued uploads, last HealthKit wake, Keychain
   token presence, Worker URL and errors.
 - HealthKit anchors can be reset for a full resync.
@@ -79,6 +86,20 @@ cd ios-companion
 
 The script also re-applies the HealthKit capability and `Apple Development`
 signing identity that XcodeGen does not serialize as a nested capability.
+
+## Troubleshooting uploads
+
+- **401 Device token invalid or revoked** — create a new token in Fitness OS →
+  Settings → Cloud & Apple Health, paste it, tap **Save connection**, then
+  **Test connection**. The app keeps the failed queue; nothing is deleted.
+- **413 Batch too large** — the app chunks new and existing queue items into 30
+  record batches automatically.
+- **Queue grows but Last sync never appears** — queue items are kept until the
+  Worker returns 2xx. Test Connection distinguishes auth failure from a public
+  network reachability failure.
+- **Debugging** — the iOS app logs route, HTTP status, error category and queue
+  item ID only. It never logs tokens or HealthKit sample data. The Worker logs
+  `[worker]` route/status/category and `[health]` accepted counts only.
 
 ## Verification status
 

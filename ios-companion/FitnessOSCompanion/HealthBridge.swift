@@ -1,5 +1,7 @@
 import SwiftUI
 import Foundation
+import CryptoKit
+import os
 import HealthKit
 import UIKit
 import Security
@@ -115,6 +117,21 @@ struct HealthPayload: Codable {
         samples.isEmpty && workouts.isEmpty && heartRateSamples.isEmpty &&
         deletedSampleIds.isEmpty && deletedWorkoutIds.isEmpty && deletedHeartRateIds.isEmpty
     }
+
+    /// Stable identity for queue deduplication. Excludes syncedAt so pressing
+    /// Sync Now twice cannot duplicate the same HealthKit batch.
+    var fingerprint: String {
+        let ids = (
+            samples.map(\.id) +
+            workouts.map(\.id) +
+            heartRateSamples.map(\.id) +
+            deletedSampleIds +
+            deletedWorkoutIds +
+            deletedHeartRateIds
+        ).sorted().joined(separator: "|")
+        let digest = SHA256.hash(data: Data(ids.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 struct QueueItem: Codable, Identifiable {
@@ -127,6 +144,8 @@ struct QueueItem: Codable, Identifiable {
 
 final class UploadQueue {
     static let shared = UploadQueue()
+    static let chunkSize = 30
+
     private let fileURL: URL
     private(set) var items: [QueueItem] = []
 
@@ -135,6 +154,7 @@ final class UploadQueue {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("fitnessos-upload-queue.json")
         load()
+        rechunkExisting()
     }
 
     private func load() {
@@ -149,9 +169,73 @@ final class UploadQueue {
         }
     }
 
+    /// Splits a large HealthKit payload into small batches. This keeps every
+    /// Worker invocation inside the free plan's D1 query budget and lets old
+    /// queued payloads drain after the app update.
+    func split(_ payload: HealthPayload) -> [HealthPayload] {
+        guard !payload.isEmpty else { return [] }
+        let total = max(
+            payload.samples.count,
+            payload.workouts.count,
+            payload.heartRateSamples.count,
+            payload.deletedSampleIds.count,
+            payload.deletedWorkoutIds.count,
+            payload.deletedHeartRateIds.count
+        )
+        let chunkCount = max(1, Int(ceil(Double(total) / Double(Self.chunkSize))))
+        var chunks: [HealthPayload] = []
+        for index in 0..<chunkCount {
+            let lower = index * Self.chunkSize
+            let chunk = HealthPayload(
+                version: payload.version,
+                source: payload.source,
+                syncedAt: payload.syncedAt,
+                samples: slice(payload.samples, from: lower),
+                workouts: slice(payload.workouts, from: lower),
+                heartRateSamples: slice(payload.heartRateSamples, from: lower),
+                deletedSampleIds: slice(payload.deletedSampleIds, from: lower),
+                deletedWorkoutIds: slice(payload.deletedWorkoutIds, from: lower),
+                deletedHeartRateIds: slice(payload.deletedHeartRateIds, from: lower),
+                deviceName: payload.deviceName
+            )
+            if !chunk.isEmpty { chunks.append(chunk) }
+        }
+        return chunks
+    }
+
+    private func slice<T>(_ values: [T], from lower: Int) -> [T] {
+        guard lower < values.count else { return [] }
+        return Array(values[lower..<min(lower + Self.chunkSize, values.count)])
+    }
+
     func append(_ payload: HealthPayload) {
-        guard !payload.isEmpty else { return }
-        items.append(QueueItem(id: UUID().uuidString, createdAt: ISO8601DateFormatter().string(from: Date()), payload: payload))
+        for chunk in split(payload) {
+            guard !items.contains(where: { $0.payload.fingerprint == chunk.fingerprint }) else { continue }
+            items.append(QueueItem(
+                id: UUID().uuidString,
+                createdAt: ISO8601DateFormatter().string(from: Date()),
+                payload: chunk
+            ))
+        }
+        persist()
+    }
+
+    /// Rechunks any large batches queued by an older build without discarding
+    /// their data. Duplicate fingerprints are collapsed.
+    func rechunkExisting() {
+        guard !items.isEmpty else { return }
+        var rebuilt: [QueueItem] = []
+        for item in items {
+            for chunk in split(item.payload) {
+                guard !rebuilt.contains(where: { $0.payload.fingerprint == chunk.fingerprint }) else { continue }
+                rebuilt.append(QueueItem(
+                    id: UUID().uuidString,
+                    createdAt: item.createdAt,
+                    payload: chunk
+                ))
+            }
+        }
+        items = rebuilt
         persist()
     }
 
@@ -169,9 +253,12 @@ final class UploadQueue {
 final class HealthSyncManager: ObservableObject {
     private let store = HKHealthStore()
     private let defaults = UserDefaults.standard
+    private let log = Logger(subsystem: "com.sakethdonepudi.fitnessos.bridge", category: "sync")
     private var observers: [HKObserverQuery] = []
     private var syncing = false
     private var rerunRequested = false
+    private var retryFailures = 0
+    private var nextRetryAt: Date?
 
     @Published var status: String = "Not connected"
     @Published var lastSync: Date?
@@ -179,6 +266,9 @@ final class HealthSyncManager: ObservableObject {
     @Published var permissionGranted = false
     @Published var lastObserverEvent: Date?
     @Published var errorText: String?
+    @Published var lastRequest: String?
+    @Published var lastHTTPStatus: Int?
+    @Published var lastErrorCategory: String?
 
     var tokenStored: Bool { !token.isEmpty }
 
@@ -208,13 +298,16 @@ final class HealthSyncManager: ObservableObject {
 
     func configure(apiUrl: String, deviceToken: String) {
         UserDefaults.standard.set(apiUrl.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "fos.apiUrl")
-        Keychain.set(deviceToken.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "deviceToken")
+        Keychain.set(deviceToken.trimmingCharacters(in: .whitespacesAndNewlines), for: "deviceToken")
         refreshStatus()
     }
 
     func refreshStatus() {
+        pending = UploadQueue.shared.count
         if apiBase.isEmpty || token.isEmpty {
             status = "Connection required"
+        } else if errorText != nil && pending > 0 {
+            status = "Sync error"
         } else if !permissionGranted {
             status = "Permission required"
         } else if let last = lastSync, Date().timeIntervalSince(last) < 3 * 3600 {
@@ -224,7 +317,6 @@ final class HealthSyncManager: ObservableObject {
         } else {
             status = "Connected — waiting for first sync"
         }
-        pending = UploadQueue.shared.count
     }
 
     func requestAuthorization() async {
@@ -275,13 +367,39 @@ final class HealthSyncManager: ObservableObject {
         }
     }
 
+    struct AuthCheck: Decodable {
+        let ok: Bool
+        let kind: String
+        let deviceName: String?
+    }
+
     func testConnection() async -> String {
-        guard let url = URL(string: apiBase + "/api/healthz") else { return "Invalid Worker URL" }
+        guard !token.isEmpty else { return "Enter a device token first." }
+        guard let url = URL(string: apiBase + "/api/health/auth") else { return "Invalid Worker URL" }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        lastRequest = "GET /api/health/auth"
         do {
-            let (_, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { return "Invalid response" }
-            return http.statusCode == 200 ? "Worker reachable (HTTP 200)" : "Worker returned HTTP \(http.statusCode)"
+            lastHTTPStatus = http.statusCode
+            if http.statusCode == 401 {
+                lastErrorCategory = "auth"
+                log.warning("auth check rejected status=401")
+                return "Device token rejected (401). Create a new device token in Fitness OS and save it."
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                lastErrorCategory = "http_\(http.statusCode)"
+                return "Worker returned HTTP \(http.statusCode)"
+            }
+            let decoded = try JSONDecoder().decode(AuthCheck.self, from: data)
+            lastErrorCategory = nil
+            let name = decoded.deviceName.map { " (\($0))" } ?? ""
+            lastRequest = "GET /api/health/auth → 200"
+            return "Authenticated as \(decoded.kind)\(name)"
         } catch {
+            lastErrorCategory = "network"
             return "Connection failed: \(error.localizedDescription)"
         }
     }
@@ -296,7 +414,7 @@ final class HealthSyncManager: ObservableObject {
         errorText = nil
     }
 
-    func sync(reason: String = "manual") async {
+    func sync(reason: String = "manual", force: Bool = false) async {
         if syncing {
             rerunRequested = true
             return
@@ -376,33 +494,49 @@ final class HealthSyncManager: ObservableObject {
         if !payload.isEmpty {
             UploadQueue.shared.append(payload)
         }
-        await flushQueue()
+        await flushQueue(force: force || reason == "manual")
+        if UploadQueue.shared.count == 0 && errorText == nil {
+            lastSync = Date()
+            defaults.set(iso(lastSync!), forKey: "fos.lastSync")
+        }
+        pending = UploadQueue.shared.count
         refreshStatus()
         if reason == "manual" && errorText == nil {
             status = "Synced"
         }
     }
 
-    private func flushQueue() async {
+    private func flushQueue(force: Bool = false) async {
+        if !force, let nextRetryAt, nextRetryAt > Date() {
+            pending = UploadQueue.shared.count
+            return
+        }
         var remaining = UploadQueue.shared.items
         while let item = remaining.first {
             do {
-                try await post(item.payload)
+                try await post(item)
                 UploadQueue.shared.remove(item.id)
                 remaining.removeFirst()
                 lastSync = Date()
                 defaults.set(iso(lastSync!), forKey: "fos.lastSync")
                 pending = UploadQueue.shared.count
+                retryFailures = 0
+                nextRetryAt = nil
             } catch {
+                retryFailures += 1
+                let delay = min(300, 15 * pow(2, Double(retryFailures - 1)))
+                nextRetryAt = Date().addingTimeInterval(delay)
                 errorText = error.localizedDescription
                 pending = UploadQueue.shared.count
-                // Keep the item for the next launch/observer. Do not advance past it.
+                log.error("upload failed item=\(item.id, privacy: .public) category=auth_or_http retryIn=\(delay, privacy: .public)s")
+                // Keep this item and every item behind it. Never drop queued data.
                 break
             }
         }
     }
 
-    private func post(_ payload: HealthPayload) async throws {
+    private func post(_ item: QueueItem) async throws {
+        let payload = item.payload
         guard let url = URL(string: apiBase + "/api/health/sync") else {
             throw SyncError.invalidURL
         }
@@ -410,14 +544,45 @@ final class HealthSyncManager: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 30
+        request.timeoutInterval = 45
         request.httpBody = try JSONEncoder().encode(payload)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw SyncError.badResponse }
-        guard (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw SyncError.server(http.statusCode, body)
+        lastRequest = "POST /api/health/sync (item \(item.id.prefix(8)))"
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw SyncError.badResponse }
+            lastHTTPStatus = http.statusCode
+            if (200..<300).contains(http.statusCode) {
+                lastErrorCategory = nil
+                lastRequest = "POST /api/health/sync → \(http.statusCode) (item \(item.id.prefix(8)))"
+                log.info("upload ok item=\(item.id, privacy: .public) status=\(http.statusCode, privacy: .public) samples=\(payload.samples.count, privacy: .public) workouts=\(payload.workouts.count, privacy: .public) hr=\(payload.heartRateSamples.count, privacy: .public)")
+                return
+            }
+            let message = (try? JSONDecoder().decode(ServerError.self, from: data))?.error
+                ?? String(data: data, encoding: .utf8)?.prefix(160)
+                ?? "No response body"
+            if http.statusCode == 401 {
+                lastErrorCategory = "auth"
+                log.error("upload rejected item=\(item.id, privacy: .public) status=401 category=auth")
+                throw SyncError.auth(String(message))
+            }
+            if http.statusCode == 413 {
+                lastErrorCategory = "batch_too_large"
+                throw SyncError.batchTooLarge(String(message))
+            }
+            lastErrorCategory = "http_\(http.statusCode)"
+            log.error("upload failed item=\(item.id, privacy: .public) status=\(http.statusCode, privacy: .public) category=http")
+            throw SyncError.server(http.statusCode, String(message))
+        } catch let error as SyncError {
+            throw error
+        } catch {
+            lastErrorCategory = "network"
+            log.error("upload network error item=\(item.id, privacy: .public)")
+            throw SyncError.network(error.localizedDescription)
         }
+    }
+
+    private struct ServerError: Decodable {
+        let error: String
     }
 
     // MARK: Anchored queries
@@ -488,7 +653,7 @@ final class HealthSyncManager: ObservableObject {
                 start: iso(workout.startDate),
                 end: iso(workout.endDate),
                 durationSec: workout.duration,
-                distanceKm: workout.totalDistance?.doubleValue(for: .kilometer()),
+                distanceKm: workout.totalDistance?.doubleValue(for: HKUnit.meterUnit(with: .kilo)),
                 avgHr: nil,
                 maxHr: nil,
                 activeCalories: workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()),
@@ -543,13 +708,19 @@ final class HealthSyncManager: ObservableObject {
 enum SyncError: LocalizedError {
     case invalidURL
     case badResponse
+    case auth(String)
+    case batchTooLarge(String)
     case server(Int, String)
+    case network(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "Invalid Worker URL"
         case .badResponse: return "Invalid server response"
+        case .auth(let message): return "Authentication failed (401): \(message). Create a new device token in Fitness OS and save it."
+        case .batchTooLarge(let message): return "Upload batch too large (413): \(message)"
         case .server(let code, let body): return "Server \(code): \(body.prefix(180))"
+        case .network(let message): return "Network error: \(message)"
         }
     }
 }
@@ -578,14 +749,16 @@ struct ContentView: View {
                     HStack {
                         Button("Save connection") {
                             manager.configure(apiUrl: apiUrl, deviceToken: token)
+                            connectionTest = "Saved to Keychain. Tap Test connection to verify the token."
                         }
                         .disabled(apiUrl.isEmpty || token.isEmpty)
                         Button("Test connection") {
+                            manager.configure(apiUrl: apiUrl, deviceToken: token)
                             Task {
                                 connectionTest = await manager.testConnection()
                             }
                         }
-                        .disabled(apiUrl.isEmpty)
+                        .disabled(apiUrl.isEmpty || token.isEmpty)
                     }
                     if !connectionTest.isEmpty {
                         Text(connectionTest).font(.caption).foregroundStyle(.secondary)
@@ -597,9 +770,15 @@ struct ContentView: View {
                         Task { await manager.requestAuthorization() }
                     }
                     Button("Sync now") {
-                        Task { await manager.sync(reason: "manual") }
+                        // Save the field first: this fixes the common case where a
+                        // newly pasted token was never written to the Keychain.
+                        manager.configure(apiUrl: apiUrl, deviceToken: token)
+                        Task { await manager.sync(reason: "manual", force: true) }
                     }
                     .disabled(apiUrl.isEmpty || token.isEmpty)
+                    Text("Sync Now saves the current Worker URL and token to the Keychain first.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     Button("Enable background observers") {
                         manager.startObservers()
                     }
@@ -615,6 +794,15 @@ struct ContentView: View {
                     LabeledContent("Last HealthKit wake", value: manager.lastObserverEvent?.formatted(date: .omitted, time: .shortened) ?? "—")
                     LabeledContent("Device token", value: manager.tokenStored ? "Stored in Keychain" : "Missing")
                     LabeledContent("Worker URL", value: apiUrl.isEmpty ? "Missing" : apiUrl)
+                    if let request = manager.lastRequest {
+                        LabeledContent("Last request", value: request)
+                    }
+                    if let status = manager.lastHTTPStatus {
+                        LabeledContent("Last HTTP status", value: "\(status)")
+                    }
+                    if let category = manager.lastErrorCategory {
+                        LabeledContent("Error category", value: category)
+                    }
                     if let error = manager.errorText {
                         Text(error).font(.caption).foregroundStyle(.red)
                     }
@@ -631,13 +819,15 @@ struct ContentView: View {
                 token = Keychain.get("deviceToken") ?? ""
                 manager.refreshStatus()
                 if !apiUrl.isEmpty && !token.isEmpty {
+                    manager.configure(apiUrl: apiUrl, deviceToken: token)
                     manager.startObservers()
-                    await manager.sync(reason: "launch")
+                    await manager.sync(reason: "launch", force: true)
                 }
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active {
-                    Task { await manager.sync(reason: "foreground") }
+                if phase == .active && !apiUrl.isEmpty && !token.isEmpty {
+                    manager.configure(apiUrl: apiUrl, deviceToken: token)
+                    Task { await manager.sync(reason: "foreground", force: true) }
                 }
             }
         }

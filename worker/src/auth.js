@@ -158,9 +158,13 @@ export async function verifyDevice(env, raw) {
 
 export async function requireDeviceOrSession(env, request) {
   const token = bearerToken(request);
-  const device = await verifyDevice(env, token);
-  if (device) return { userId: device.user_id, deviceId: device.device_id, kind: 'device' };
+  if (!token) throw new HttpError(401, 'Missing bearer token');
+  if (token.startsWith('fos_')) {
+    const device = await verifyDevice(env, token);
+    if (!device) throw new HttpError(401, 'Device token invalid or revoked');
+    return { userId: device.user_id, deviceId: device.device_id, kind: 'device' };
+  }
   const session = await verifySession(env, token);
   if (session) return { userId: session.userId, kind: 'session' };
-  throw new HttpError(401, 'Not authenticated');
+  throw new HttpError(401, 'Session expired or invalid');
 }

@@ -28,8 +28,7 @@ import {
 import {
   applyChange,
   pullRecords,
-  getRecord,
-  serverUpsert,
+  serverUpsertMany,
   audit,
   deleteUserData,
   listRecords,
@@ -149,6 +148,23 @@ async function route(request, env) {
     return json({ results, records, conflicts, cursor: maxPulled, serverTime: nowIso() });
   }
 
+  if (path === '/api/health/auth' && method === 'GET') {
+    const auth = await requireDeviceOrSession(env, request);
+    let deviceName = null;
+    if (auth.deviceId) {
+      const row = await env.DB.prepare(`SELECT name FROM devices WHERE id = ?`).bind(auth.deviceId).first();
+      deviceName = row?.name || null;
+    }
+    return json({
+      ok: true,
+      kind: auth.kind,
+      deviceId: auth.deviceId || null,
+      deviceName,
+      userId: auth.userId,
+      serverTime: nowIso(),
+    });
+  }
+
   if (path === '/api/health/sync' && method === 'POST') {
     const auth = await requireDeviceOrSession(env, request);
     await rateLimit(env, `health:${auth.userId}:${auth.deviceId || 'session'}`, 240, 3600);
@@ -163,14 +179,19 @@ async function route(request, env) {
     const deletedSamples = Array.isArray(body.deletedSampleIds) ? body.deletedSampleIds : [];
     const deletedWorkouts = Array.isArray(body.deletedWorkoutIds) ? body.deletedWorkoutIds : [];
     const deletedHeartRate = Array.isArray(body.deletedHeartRateIds) ? body.deletedHeartRateIds : [];
-    if (samples.length > 3000 || workouts.length > 300) throw new HttpError(413, 'Too many records in one batch');
+    const incomingCount = samples.length + workouts.length + heartRateSamples.length
+      + deletedSamples.length + deletedWorkouts.length + deletedHeartRate.length;
+    if (incomingCount > 200) {
+      throw new HttpError(413, 'Batch too large. The companion should split uploads into chunks of 30 records.');
+    }
 
-    let acceptedSamples = 0;
-    let acceptedWorkouts = 0;
-    let deleted = 0;
-    let acceptedHeartRate = 0;
     const source = validateString(body.source || 'iPhone+AppleWatch', 'source', { max: 80 });
     const at = nowIso();
+    const records = [];
+    let acceptedSamples = 0;
+    let acceptedWorkouts = 0;
+    let acceptedHeartRate = 0;
+    let deleted = 0;
 
     for (const sample of samples) {
       if (!sample || typeof sample.id !== 'string' || !sample.id) continue;
@@ -179,13 +200,18 @@ async function route(request, env) {
       const steps = Number(sample.steps);
       if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) continue;
       if (!Number.isFinite(steps) || steps < 0 || steps > 200000) continue;
-      await serverUpsert(env, auth.userId, 'health_step_samples', sample.id.slice(0, 120), {
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
-        steps: Math.round(steps),
-        source: String(sample.source || source).slice(0, 120),
-        device: sample.device ? String(sample.device).slice(0, 120) : null,
-        imported_at: at,
+      records.push({
+        collection: 'health_step_samples',
+        id: sample.id.slice(0, 120),
+        updatedAt: at,
+        data: {
+          start_time: start.toISOString(),
+          end_time: end.toISOString(),
+          steps: Math.round(steps),
+          source: String(sample.source || source).slice(0, 120),
+          device: sample.device ? String(sample.device).slice(0, 120) : null,
+          imported_at: at,
+        },
       });
       acceptedSamples += 1;
     }
@@ -195,78 +221,99 @@ async function route(request, env) {
       const start = new Date(workout.start || workout.start_time);
       const end = new Date(workout.end || workout.end_time);
       if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) continue;
-      await serverUpsert(env, auth.userId, 'health_workouts', workout.id.slice(0, 120), {
-        type: String(workout.type || 'other').slice(0, 80),
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
-        duration_sec: Number(workout.durationSec ?? workout.duration_sec) || Math.round((end - start) / 1000),
-        distance_km: workout.distanceKm == null ? null : Number(workout.distanceKm),
-        avg_hr: workout.avgHr == null ? null : Number(workout.avgHr),
-        max_hr: workout.maxHr == null ? null : Number(workout.maxHr),
-        active_calories: workout.activeCalories == null ? null : Number(workout.activeCalories),
-        source: String(workout.source || source).slice(0, 120),
-        device: workout.device ? String(workout.device).slice(0, 120) : null,
-        imported_at: at,
+      records.push({
+        collection: 'health_workouts',
+        id: workout.id.slice(0, 120),
+        updatedAt: at,
+        data: {
+          type: String(workout.type || 'other').slice(0, 80),
+          start_time: start.toISOString(),
+          end_time: end.toISOString(),
+          duration_sec: Number(workout.durationSec ?? workout.duration_sec) || Math.round((end - start) / 1000),
+          distance_km: workout.distanceKm == null ? null : Number(workout.distanceKm),
+          avg_hr: workout.avgHr == null ? null : Number(workout.avgHr),
+          max_hr: workout.maxHr == null ? null : Number(workout.maxHr),
+          active_calories: workout.activeCalories == null ? null : Number(workout.activeCalories),
+          source: String(workout.source || source).slice(0, 120),
+          device: workout.device ? String(workout.device).slice(0, 120) : null,
+          imported_at: at,
+        },
       });
       acceptedWorkouts += 1;
     }
 
     for (const hr of heartRateSamples) {
       if (!hr || typeof hr.id !== 'string' || !hr.id) continue;
-      const at = new Date(hr.start || hr.timestamp);
+      const hrAt = new Date(hr.start || hr.timestamp);
       const bpm = Number(hr.bpm ?? hr.value);
-      if (!Number.isFinite(at.getTime()) || !Number.isFinite(bpm) || bpm <= 0 || bpm > 300) continue;
-      await serverUpsert(env, auth.userId, 'heart_rate_samples', hr.id.slice(0, 120), {
-        timestamp: at.toISOString(),
-        bpm: Math.round(bpm),
-        source: String(hr.source || source).slice(0, 120),
-        device: hr.device ? String(hr.device).slice(0, 120) : null,
-        imported_at: at.toISOString(),
+      if (!Number.isFinite(hrAt.getTime()) || !Number.isFinite(bpm) || bpm <= 0 || bpm > 300) continue;
+      records.push({
+        collection: 'heart_rate_samples',
+        id: hr.id.slice(0, 120),
+        updatedAt: at,
+        data: {
+          timestamp: hrAt.toISOString(),
+          bpm: Math.round(bpm),
+          source: String(hr.source || source).slice(0, 120),
+          device: hr.device ? String(hr.device).slice(0, 120) : null,
+          imported_at: at,
+        },
       });
       acceptedHeartRate += 1;
     }
 
-    for (const id of deletedSamples.slice(0, 1000)) {
-      const existing = await getRecord(env, auth.userId, String(id));
-      if (existing && !existing.deleted) {
-        await serverUpsert(env, auth.userId, 'health_step_samples', String(id), existing.data, { deleted: true });
-        deleted += 1;
-      }
+    // Deletions are soft tombstones, never physical deletes. Existing data_json is
+    // preserved on conflict by serverUpsertMany.
+    for (const id of deletedSamples) {
+      if (!id) continue;
+      records.push({ collection: 'health_step_samples', id: String(id).slice(0, 120), updatedAt: at, deleted: true, data: {} });
+      deleted += 1;
     }
-    for (const id of deletedHeartRate.slice(0, 1000)) {
-      const existing = await getRecord(env, auth.userId, String(id));
-      if (existing && !existing.deleted) {
-        await serverUpsert(env, auth.userId, 'heart_rate_samples', String(id), existing.data, { deleted: true });
-        deleted += 1;
-      }
+    for (const id of deletedHeartRate) {
+      if (!id) continue;
+      records.push({ collection: 'heart_rate_samples', id: String(id).slice(0, 120), updatedAt: at, deleted: true, data: {} });
+      deleted += 1;
     }
-    for (const id of deletedWorkouts.slice(0, 500)) {
-      const existing = await getRecord(env, auth.userId, String(id));
-      if (existing && !existing.deleted) {
-        await serverUpsert(env, auth.userId, 'health_workouts', String(id), existing.data, { deleted: true });
-        deleted += 1;
-      }
+    for (const id of deletedWorkouts) {
+      if (!id) continue;
+      records.push({ collection: 'health_workouts', id: String(id).slice(0, 120), updatedAt: at, deleted: true, data: {} });
+      deleted += 1;
     }
 
     const importId = `import:${uuid()}`;
-    await serverUpsert(env, auth.userId, 'health_imports', importId, {
-      source,
-      device_id: auth.deviceId || 'session',
-      device_name: body.deviceName || null,
-      synced_at: body.syncedAt || at,
-      received_at: at,
-      samples: acceptedSamples,
-      workouts: acceptedWorkouts,
-      heart_rate: acceptedHeartRate,
-      deleted,
-      version: Number(body.version) || 1,
+    records.push({
+      collection: 'health_imports',
+      id: importId,
+      updatedAt: at,
+      data: {
+        source,
+        device_id: auth.deviceId || 'session',
+        device_name: body.deviceName || null,
+        synced_at: body.syncedAt || at,
+        received_at: at,
+        samples: acceptedSamples,
+        workouts: acceptedWorkouts,
+        heart_rate: acceptedHeartRate,
+        deleted,
+        version: Number(body.version) || 1,
+      },
     });
+
+    await serverUpsertMany(env, auth.userId, records, { deviceId: auth.deviceId || null });
     await audit(env, auth.userId, 'health.sync', 'health', {
       deviceId: auth.deviceId || 'session',
       samples: acceptedSamples,
       workouts: acceptedWorkouts,
       heart_rate: acceptedHeartRate,
       deleted,
+    });
+    console.log('[health]', {
+      deviceId: auth.deviceId || 'session',
+      samples: acceptedSamples,
+      workouts: acceptedWorkouts,
+      heartRate: acceptedHeartRate,
+      deleted,
+      records: records.length,
     });
     return json({
       ok: true,
@@ -398,7 +445,12 @@ export default {
       return response;
     } catch (err) {
       const status = err?.status || 500;
-      if (status >= 500) console.error('[worker]', err);
+      const pathname = new URL(request.url).pathname;
+      if (status >= 500) {
+        console.error('[worker]', { method: request.method, path: pathname, status, category: 'internal', message: err?.message });
+      } else if (status === 401 || status === 403) {
+        console.warn('[worker]', { method: request.method, path: pathname, status, category: 'auth', message: err?.message });
+      }
       const payload = { error: err?.message || 'Internal error' };
       if (err?.detail) payload.detail = err.detail;
       const response = json(payload, status);

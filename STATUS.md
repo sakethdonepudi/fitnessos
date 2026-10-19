@@ -1,6 +1,6 @@
 # Deployment status
 
-Last verified: 2026-10-19 20:52 UTC (2026-10-20 02:22 IST)
+Last verified: 2026-10-19 23:15 UTC (2026-10-20 04:45 IST)
 
 ## Live services
 
@@ -16,7 +16,7 @@ Last verified: 2026-10-19 20:52 UTC (2026-10-20 02:22 IST)
 | Apple Health companion | Code ready | Not built/tested on a physical device |
 
 - Repository: https://github.com/sakethdonepudi/fitnessos (public, code only)
-- Worker deployment version: `ffb091e1-06b9-4260-b95f-2c21c0a4ded1`
+- Worker deployment version: `9110fb1e-3126-48b7-8f56-97028474da48`
 - Deployed source commit: `ea56868`
 - Pages workflow: https://github.com/sakethdonepudi/fitnessos/actions/runs/39322084211
 
@@ -86,6 +86,51 @@ adapter for future use.
 - GitHub Pages/Actions are free for this public repo.
 - PBKDF2 is capped at 100,000 iterations on Workers (platform limit); the web
   backup uses stronger browser PBKDF2.
+
+## Apple Health upload fix (2026-10-20)
+
+Root cause found:
+
+- The old app's Test Connection only called the public `/api/healthz`, so it
+  could show HTTP 200 while the device token was invalid.
+- Sync Now used the Keychain token rather than the token currently in the text
+  field, so a newly pasted token could be ignored.
+- The Worker upserted each HealthKit sample with several sequential D1 queries.
+  A large initial backfill partially wrote **249 real Apple Watch/iPhone step
+  samples** into D1, then exceeded the Workers Free per-invocation D1 query
+  budget. The request failed before creating the import receipt, so the queue
+  was never removed and subsequent attempts re-sent large batches.
+- The 401 was an earlier stale/invalid token error; the partial write was the
+  reason `Last sync` stayed empty after the token was corrected.
+
+Fixed:
+
+- `GET /api/health/auth` now validates device tokens; Test Connection uses it.
+- Sync Now saves the current Worker URL/token to the Keychain before syncing.
+- Health uploads are chunked into 30-record batches and deduplicated by a
+  stable HealthKit UUID fingerprint. Existing queue items are rechunked on
+  launch, preserving all queued data.
+- The Worker batch-upserts health records with one sequence allocation and
+  chunked `DB.batch()` calls, avoiding the per-record query explosion.
+- Deletions are soft tombstones; existing samples and data are never physically
+  deleted.
+- Retry uses exponential backoff; manual Sync Now forces a retry.
+- Safe diagnostics log route, status, category and queue item ID only. Tokens
+  and HealthKit data are never logged.
+- The existing production device token is active (not revoked); the 249 real
+  samples were preserved.
+
+Verification done here:
+
+- Worker device-token tests: valid token → `200` auth; invalid token → `401`;
+  revoked token → `401`; empty sync → `200`.
+- Local Worker batch test: **100 samples accepted in one request**, tombstone
+  accepted, no query-limit failure.
+- iOS Swift source syntax parse passes; Xcode project/plist validation passes.
+- **Not installed/run on the iPhone from this environment**: Xcode and the
+  physical device are not available here. The queue draining, Last sync update
+  and real background upload must be confirmed on your phone after rebuilding
+  the app.
 
 ## Apple Watch companion
 
