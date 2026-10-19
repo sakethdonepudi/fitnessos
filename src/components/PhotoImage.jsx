@@ -61,11 +61,11 @@ export function usePhotoUrl(photoId) {
     };
   }, [photoId]);
 
-  return { url, missing };
+  return { url, missing, missingReason };
 }
 
 export function PhotoImage({ photoId, alt = '', className, onClick, style }) {
-  const { url, missing } = usePhotoUrl(photoId);
+  const { url, missing, missingReason } = usePhotoUrl(photoId);
   if (!url) {
     return (
       <div className={`photo-placeholder ${className || ''}`} style={style} aria-label={missing ? 'Photo unavailable' : 'Loading photo'}>
