@@ -15,6 +15,7 @@ let running = false;
 let timer = null;
 let debounce = null;
 let started = false;
+let rerunRequested = false;
 
 export const syncState = {
   status: 'idle', // idle | syncing | synced | offline | local | error
@@ -224,7 +225,10 @@ async function preparePhotoUploads(records) {
 }
 
 export async function syncNow() {
-  if (running) return { skipped: true };
+  if (running) {
+    rerunRequested = true;
+    return { skipped: true, queued: true };
+  }
   if (!remote.configured()) {
     setState({ status: 'local', configured: false, online: navigator.onLine });
     return { skipped: true, reason: 'not_configured' };
@@ -306,6 +310,12 @@ export async function syncNow() {
     return { ok: false, error: err.message };
   } finally {
     running = false;
+    if (rerunRequested) {
+      rerunRequested = false;
+      setTimeout(() => {
+        syncNow().catch(() => {});
+      }, 250);
+    }
   }
 }
 
